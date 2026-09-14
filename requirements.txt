@@ -1,0 +1,8 @@
+kagglehub>=0.2.0
+opencv-python==4.8.1.78
+numpy==1.26.4
+pandas==2.2.2
+matplotlib==3.8.4
+seaborn==0.13.2
+Pillow==10.3.0
+scipy==1.13.0

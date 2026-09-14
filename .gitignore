@@ -1,0 +1,33 @@
+# Dataset — no se sube por tamaño
+data/
+kaggle.json
+~/.kaggle/
+
+# Outputs del notebook
+features_tbx11k.csv
+*.csv
+
+# Checkpoints y pesos
+*.pth
+*.h5
+*.hdf5
+checkpoints/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

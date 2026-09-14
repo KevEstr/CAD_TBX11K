@@ -37,6 +37,13 @@ Pillow
 scipy
 ```
 
+## Para correr el proyecto en local:
+- py -m venv venv
+- venv\Scripts\activate
+- pip install -r requirements.txt
+- pip install ipykernel
+- python -m ipykernel install --user --name=cad-tbx11k
+
 ## Referencias
 
 - `TB_detection` — estructura de carga del dataset

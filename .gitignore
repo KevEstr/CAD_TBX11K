@@ -3,7 +3,7 @@ data/
 kaggle.json
 ~/.kaggle/
 
-# Outputs del notebook
+# Outputs
 features_tbx11k.csv
 *.csv
 

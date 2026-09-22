@@ -7,3 +7,5 @@ seaborn
 Pillow
 scipy
 ipykernel
+scikit-image
+tqdm

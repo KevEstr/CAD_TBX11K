@@ -9,3 +9,4 @@ scipy
 ipykernel
 scikit-image
 tqdm
+imbalanced-learn

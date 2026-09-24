@@ -9,7 +9,7 @@ Pipeline de análisis exploratorio, preprocesamiento y extracción de caracterí
 ```text
 cad-tbx11k/
 │
-├── cad_tbx11k/                  ← Módulo Python reutilizable (framework)
+├── src/                  ← Módulo Python reutilizable (framework)
 │   ├── __init__.py              ← Punto de entrada único del paquete
 │   ├── data.py                  ← Carga del dataset y construcción del DataFrame base
 │   ├── preprocessing.py         ← Cadena de preprocesamiento (BF + CLAHE)

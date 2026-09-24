@@ -783,7 +783,6 @@ def build_regional_comparison_table(reg_df: pd.DataFrame) -> pd.DataFrame:
 def plot_glcm_distributions(features_df: pd.DataFrame, save_path: Optional[str] = None) -> None:
     """
     1×5 panel of violin + box plots for the five GLCM properties per class.
-    Values are normalized to [0, 1] for cross-property comparison.
     References: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.graycomatrix
     """
     set_publication_style()
@@ -791,22 +790,13 @@ def plot_glcm_distributions(features_df: pd.DataFrame, save_path: Optional[str] 
     labels = {"glcm_contrast_mean": "Contrast", "glcm_correlation_mean": "Correlation",
                "glcm_energy_mean": "Energy", "glcm_homogeneity_mean": "Homogeneity",
                "glcm_dissimilarity_mean": "Dissimilarity"}
-
-    # Se normaliza cada propiedad entre 0 y 1 para comparación entre escalas distintas
-    df_plot = features_df[["class_name"] + glcm_mean_cols].copy()
-    for col in glcm_mean_cols:
-        col_min, col_max = df_plot[col].min(), df_plot[col].max()
-        df_plot[col] = (df_plot[col] - col_min) / (col_max - col_min + 1e-9)
-
-    fig, axes = plt.subplots(1, 5, figsize=(20, 5), sharey=True)
+    fig, axes = plt.subplots(1, 5, figsize=(20, 5))
     for ax, col in zip(axes, glcm_mean_cols):
-        _violin_box_strip(ax, df_plot, col)
+        _violin_box_strip(ax, features_df, col)
         ax.set_title(labels[col], fontsize=11, fontweight="bold")
         ax.set_xlabel("Class")
-        ax.set_ylabel("Normalized Value (0–1)" if ax == axes[0] else "")
-        ax.set_ylim(-0.05, 1.05)
-
-    fig.suptitle("GLCM Properties (Normalized 0–1) — Distribution by Class", fontsize=13, fontweight="bold")
+        ax.set_ylabel(labels[col])
+    fig.suptitle("GLCM Properties (Mean over 4 Angles) — Distribution by Class", fontsize=13, fontweight="bold")
     plt.tight_layout()
     # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
     plt.show()

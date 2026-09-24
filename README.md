@@ -9,12 +9,12 @@ Pipeline de análisis exploratorio, preprocesamiento y extracción de caracterí
 ```text
 cad-tbx11k/
 │
-├── cad_tbx11k/                  ← Módulo Python reutilizable (framework)
-│   ├── __init__.py              ← Punto de entrada único del paquete
-│   ├── data.py                  ← Carga del dataset y construcción del DataFrame base
-│   ├── preprocessing.py         ← Cadena de preprocesamiento (BF + CLAHE)
-│   ├── features.py              ← Extractores de características (GLCM, LBP, HOG, intensidad)
-│   └── visualization.py         ← Figuras de publicación para cada etapa del análisis
+├── src/                             ← Módulo Python reutilizable (framework)
+│   ├── __init__.py                  ← Punto de entrada único del paquete
+│   ├── data.py                      ← Carga del dataset y construcción del DataFrame base
+│   ├── preprocessing.py             ← Cadena de preprocesamiento (BF + CLAHE)
+│   ├── features.py                  ← Extractores de características (GLCM, LBP, HOG, intensidad)
+│   └── visualization.py             ← Figuras de publicación para cada etapa del análisis
 │
 ├── notebooks/
 │   ├── 01_Carga_Datos.ipynb
@@ -23,11 +23,22 @@ cad-tbx11k/
 │   ├── 04_Analisis_Regional.ipynb
 │   └── 05_Extraccion_Caracteristicas.ipynb
 │
+├── data/                            ← Dataset y archivos generados (excluido de Git)
+│   ├── TBX11K/                      ← Dataset descargado manualmente desde Kaggle
+│   │   └── imgs/
+│   │       ├── health/
+│   │       ├── sick/
+│   │       └── tb/
+│   ├── df_base.csv                  ← DataFrame base generado en notebook 01
+│   └── features_tbx11k.csv         ← Matriz de características generada en notebook 05
+│
+├── kaggle.json                      ← Credenciales Kaggle (excluido de Git)
 ├── requirements.txt
+├── .gitignore
 └── README.md
 ```
 
-Los notebooks importan directamente del módulo `cad_tbx11k`. Cualquier cambio en un parámetro del framework (por ejemplo, `CLAHE_CLIP_LIMIT`) se propaga de forma consistente a todo el pipeline.
+Los notebooks importan directamente del módulo `src`. Cualquier cambio en un parámetro del framework (por ejemplo, `CLAHE_CLIP_LIMIT`) se propaga de forma consistente a todo el pipeline.
 
 ---
 
@@ -45,6 +56,19 @@ El subconjunto utilizado corresponde a **8.400 radiografías etiquetadas** de lo
 | `health` |    0     | Radiografía de persona sana                         |
 | `sick`   |    1     | Persona enferma, no diagnosticada con TB            |
 | `tb`     |    2     | Tuberculosis confirmada                             |
+
+### Descarga manual del dataset
+
+Dado que la red institucional puede bloquear la descarga automática via `kagglehub`, el dataset debe descargarse manualmente:
+
+1. Entrar a [kaggle.com/datasets/usmanshams/tbx-11](https://www.kaggle.com/datasets/usmanshams/tbx-11) desde el navegador.
+2. Hacer clic en **Download**.
+3. Descomprimir el ZIP dentro de `data/` de modo que quede `data/TBX11K/imgs/...`.
+4. En el notebook 01, definir la ruta manualmente:
+
+```python
+DATA_ROOT = r"C:\ruta\al\proyecto\data\TBX11K"
+```
 
 ---
 
@@ -80,9 +104,9 @@ python -m ipykernel install --user --name=cad-tbx11k
 
 Seleccionar el kernel `cad-tbx11k` desde Jupyter Notebook o Visual Studio Code.
 
-### 5. Credenciales de Kaggle
+### 5. Credenciales de Kaggle (opcional)
 
-Descargar `kaggle.json` desde **kaggle.com → Settings → API → Create New Token** y colocarlo en la raíz del proyecto. El archivo está excluido por `.gitignore`.
+Si la red permite conexión a Kaggle, descargar `kaggle.json` desde **kaggle.com → Settings → API → Create New Token** y colocarlo en la raíz del proyecto. El archivo está excluido por `.gitignore`.
 
 ---
 
@@ -92,26 +116,34 @@ Descargar `kaggle.json` desde **kaggle.com → Settings → API → Create New T
 01 → 02 → 03 → 04 → 05
 ```
 
+Cada notebook guarda sus salidas en `data/` para ser reutilizadas por los siguientes:
+
+| Notebook | Genera |
+|---|---|
+| 01 | `data/df_base.csv` |
+| 05 | `data/features_tbx11k.csv` |
+
 ---
 
-## Referencia de funciones del módulo `cad_tbx11k`
+## Referencia de funciones del módulo `src`
 
-Todas las funciones se importan desde el paquete principal o desde sus módulos específicos:
+Todas las funciones se importan desde `src`:
 
 ```python
-import cad_tbx11k as cad
-# o bien
-from cad_tbx11k.data import build_base_dataframe
+from src.data import build_base_dataframe
+from src.preprocessing import preprocess
+from src.features import extract_all_features
+from src.visualization import set_publication_style
 ```
 
 ---
 
-### `cad_tbx11k.data` — Carga de datos
+### `src.data` — Carga de datos
 
 | Función / Constante | Descripción | Retorna |
 |---|---|---|
 | `LABEL_MAP` | `{'health': 0, 'sick': 1, 'tb': 2}` | `dict` |
-| `PALETTE` | Colores por clase para visualización | `dict` |
+| `PALETTE_ACADEMIC` | Colores por clase para visualización | `dict` |
 | `VALID_EXTS` | Extensiones de imagen aceptadas | `tuple` |
 | `setup_kaggle_credentials(kaggle_json=None)` | Configura `~/.kaggle/kaggle.json`. Detecta Google Colab automáticamente. | `None` |
 | `download_dataset()` | Descarga TBX11K via `kagglehub`. Usa caché local si ya fue descargado. | `str` — ruta de descarga |
@@ -122,18 +154,19 @@ from cad_tbx11k.data import build_base_dataframe
 **Ejemplo:**
 
 ```python
-from cad_tbx11k.data import setup_kaggle_credentials, download_dataset
-from cad_tbx11k.data import get_data_root, build_base_dataframe
+from src.data import build_base_dataframe, LABEL_MAP
+from pathlib import Path
 
-setup_kaggle_credentials()
-download_path = download_dataset()
-DATA_ROOT     = get_data_root(download_path)
-df_base       = build_base_dataframe(DATA_ROOT)
+DATA_ROOT = r"C:\ruta\al\proyecto\data\TBX11K"
+df_base   = build_base_dataframe(DATA_ROOT)
+
+# Cargar desde CSV si ya fue generado
+df_base = pd.read_csv(Path('..') / 'data' / 'df_base.csv')
 ```
 
 ---
 
-### `cad_tbx11k.preprocessing` — Preprocesamiento
+### `src.preprocessing` — Preprocesamiento
 
 Pipeline: `imagen original → escala de grises → resize 256×256 → Bilateral Filter → CLAHE`
 
@@ -155,10 +188,9 @@ Pipeline: `imagen original → escala de grises → resize 256×256 → Bilatera
 **Ejemplo:**
 
 ```python
-from cad_tbx11k.preprocessing import preprocess, preprocess_steps
+from src.preprocessing import preprocess, preprocess_steps
 
-img = preprocess('ruta/imagen.png')           # np.ndarray (256, 256)
-
+img   = preprocess('ruta/imagen.png')        # np.ndarray (256, 256)
 pasos = preprocess_steps('ruta/imagen.png')
 img_original  = pasos['original']
 img_bilateral = pasos['bilateral']
@@ -167,7 +199,7 @@ img_clahe     = pasos['clahe']
 
 ---
 
-### `cad_tbx11k.features` — Extracción de características
+### `src.features` — Extracción de características
 
 | Función / Constante | Descripción | Retorna |
 |---|---|---|
@@ -183,9 +215,9 @@ img_clahe     = pasos['clahe']
 | `feat_lbp(img)` | Histograma LBP uniform normalizado (P=24, R=3). | `dict` — 26 entradas |
 | `feat_hog(img)` | HOG con celdas 32×32, bloques 2×2, normalización L2-Hys. | `dict` — 1764 entradas |
 | `extract_features(image_path, label, class_name)` | Pipeline completo para una sola imagen. | `dict` — 1828 + 3 entradas, o `None` |
-| `extract_all_features(df_base, sample, sample_size, random_state)` | Extracción masiva sobre el DataFrame base. Muestra progreso con `tqdm`. | `(pd.DataFrame, list[str])` — features y errores |
-| `verify_extractors(df_base)` | Verifica la dimensionalidad de cada extractor con `assert`. Lanza error si hay discrepancia. | `None` |
-| `get_feature_groups(features_df)` | Clasifica columnas por grupo de extractor. | `dict` — grupos como claves |
+| `extract_all_features(df_base, sample, sample_size, random_state)` | Extracción masiva sobre el DataFrame base con barra de progreso `tqdm`. | `(pd.DataFrame, list[str])` — features y errores |
+| `verify_extractors(df_base)` | Verifica la dimensionalidad de cada extractor con `assert`. | `None` |
+| `get_feature_groups(features_df)` | Clasifica columnas por grupo de extractor. | `dict` |
 | `print_feature_summary(features_df)` | Imprime recuento, distribución de clases, nulos e infinitos. | `None` |
 
 **Dimensionalidad del vector de características:**
@@ -202,30 +234,34 @@ img_clahe     = pasos['clahe']
 **Ejemplo:**
 
 ```python
-from cad_tbx11k.features import extract_all_features, verify_extractors
+from src.features import extract_all_features, verify_extractors
 
-# Verificar antes de procesar
 verify_extractors(df_base)
+
+N_POR_CLASE = df_base['class_name'].value_counts().min()
+features_df, errores = extract_all_features(df_base, sample=True, sample_size=N_POR_CLASE)
 
 # Extracción completa
 features_df, errores = extract_all_features(df_base, sample=False)
-features_df.to_csv('features_tbx11k.csv', index=False)
+features_df.to_csv('../data/features_tbx11k.csv', index=False)
 ```
 
 ---
 
-### `cad_tbx11k.visualization` — Visualización
+### `src.visualization` — Visualización
 
-Todas las figuras usan estilo de publicación científica (`seaborn-v0_8-whitegrid`, DPI 150 en pantalla, 300 para guardar). Cada función incluye una línea comentada para guardar la figura:
+Todas las figuras usan estilo de publicación científica (`seaborn-v0_8-whitegrid`, DPI 150 en pantalla, 300 para guardar). Cada función incluye una línea comentada para guardar:
 
 ```python
-# fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
+# fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
 ```
+
+Las funciones con muestras ajustan automáticamente el tamaño si hay menos imágenes disponibles que `n` solicitado.
 
 | Función | Notebook | Descripción |
 |---|:---:|---|
 | `set_publication_style()` | todos | Configura `rcParams` globales de Matplotlib para estilo de artículo. |
-| `plot_dataset_distribution(resumen_df, df_base, save_path)` | 01 | Panel de barras: distribución completa y subconjunto etiquetado con porcentajes. |
+| `plot_dataset_distribution(resumen_df, df_base, save_path)` | 01 | Panel de barras: dataset completo y subconjunto etiquetado. Leyendas debajo de las barras. |
 | `plot_image_metadata(df_base, save_path)` | 01 | Distribución de modos de color y resoluciones más frecuentes. |
 | `plot_sample_images(df_base, n, random_state, save_path)` | 02 | Cuadrícula de `n` imágenes por clase sin preprocesar. |
 | `plot_intensity_histograms(df_base, n_hist, preprocessed, random_state, save_path)` | 02 / 03 | Histograma de intensidad promedio por clase. `preprocessed=True` aplica el pipeline. |
@@ -233,60 +269,53 @@ Todas las figuras usan estilo de publicación científica (`seaborn-v0_8-whitegr
 | `plot_intensity_metrics(stats_df, title_suffix, save_path)` | 02 / 03 | Panel 2×2 de violin + box + strip para las 4 métricas de intensidad. |
 | `plot_preprocessing_steps(df_base, save_path)` | 03 | Cuadrícula 3×3: original / BF / BF+CLAHE por clase. |
 | `plot_histogram_comparison(df_base, class_name, save_path)` | 03 | Histogramas antes y después del preprocesamiento para una clase. |
-| `build_preprocessing_stats_table(df_base, n_sample, random_state)` | 03 | Tabla `(Clase, Etapa)` con métricas promedio antes y después del preprocesamiento. |
-| `plot_regions_on_images(df_base, save_path)` | 04 | Dibuja los bordes de las 6 regiones anatómicas sobre imágenes preprocesadas. |
-| `compute_regional_stats(df_base, n_reg, random_state)` | 04 | Calcula intensidad media por región para una muestra por clase. Retorna `pd.DataFrame`. |
+| `build_preprocessing_stats_table(df_base, n_sample, random_state)` | 03 | Tabla `(Class, Stage)` con métricas promedio antes y después del preprocesamiento. |
+| `plot_regions_on_images(df_base, save_path)` | 04 | Bordes de las 6 regiones anatómicas sobre imágenes preprocesadas. |
+| `compute_regional_stats(df_base, n_reg, random_state)` | 04 | Intensidad media por región para una muestra por clase. Retorna `pd.DataFrame`. |
 | `plot_regional_heatmap(reg_df, save_path)` | 04 | Mapa de calor de intensidad media por región y clase. |
-| `plot_regional_distributions(reg_df, save_path)` | 04 | Panel 2×3 de violin + box + strip para cada región anatómica. |
-| `build_regional_comparison_table(reg_df)` | 04 | Tabla `media ± std` por región y clase, lista para publicación. |
-| `plot_glcm_distributions(features_df, save_path)` | 05 | Panel con distribución de las 5 propiedades GLCM por clase. |
-| `plot_lbp_histograms(features_df, save_path)` | 05 | Histograma LBP promedio por clase con área sombreada. |
+| `plot_regional_distributions(reg_df, save_path)` | 04 | Panel 2×3 con eje Y compartido (`sharey=True`) para comparación directa entre regiones. |
+| `build_regional_comparison_table(reg_df)` | 04 | Tabla `mean ± std` por región y clase, lista para publicación. |
+| `plot_glcm_distributions(features_df, save_path)` | 05 | Panel 1×5 con distribución de las 5 propiedades GLCM por clase en su escala original. |
+| `plot_lbp_histograms(features_df, save_path)` | 05 | Histograma LBP promedio por clase. Leyenda y título fuera del área del gráfico. |
 | `plot_feature_summary_table(features_df)` | 05 | Tabla de recuento de features por grupo. Retorna `pd.DataFrame`. |
 
-**Ejemplo — guardar una figura:**
+**Paleta académica:**
 
-```python
-from cad_tbx11k.visualization import plot_regional_heatmap
-
-# Genera la figura en pantalla
-plot_regional_heatmap(reg_df)
-
-# Para guardar a archivo, pasar el argumento save_path
-# y descomentar la línea fig.savefig() dentro de la función,
-# o capturar la figura manualmente:
-import matplotlib.pyplot as plt
-plot_regional_heatmap(reg_df)
-plt.savefig('figura_heatmap_regional.png', dpi=300, bbox_inches='tight')
-```
+| Clase | Color | Hex |
+|---|---|---|
+| `health` | Azul oscuro | `#2166AC` |
+| `sick` | Verde oscuro | `#4DAC26` |
+| `tb` | Rojo burdeos | `#B2182B` |
 
 ---
 
 ## Pipeline completo — uso programático
 
-El módulo puede usarse completamente fuera de los notebooks para integración en scripts o flujos automatizados:
-
 ```python
-from cad_tbx11k.data import setup_kaggle_credentials, download_dataset
-from cad_tbx11k.data import get_data_root, build_base_dataframe
-from cad_tbx11k.features import verify_extractors, extract_all_features
-from cad_tbx11k.visualization import set_publication_style, plot_regional_heatmap
-from cad_tbx11k.visualization import compute_regional_stats
+import sys
+sys.path.insert(0, '..')   # apuntar a la raíz del proyecto
 
-# 1. Configurar y cargar datos
-setup_kaggle_credentials()
-DATA_ROOT  = get_data_root(download_dataset())
-df_base    = build_base_dataframe(DATA_ROOT)
+import pandas as pd
+from pathlib import Path
+from src.data import build_base_dataframe, LABEL_MAP
+from src.features import verify_extractors, extract_all_features
+from src.visualization import set_publication_style, plot_regional_heatmap, compute_regional_stats
+
+# 1. Cargar datos
+DATA_ROOT = r"C:\ruta\al\proyecto\data\TBX11K"
+df_base   = build_base_dataframe(DATA_ROOT)
+df_base.to_csv('../data/df_base.csv', index=False)
 
 # 2. Verificar extractores
 verify_extractors(df_base)
 
 # 3. Extraer características
 features_df, errores = extract_all_features(df_base, sample=False)
-features_df.to_csv('features_tbx11k.csv', index=False)
+features_df.to_csv('../data/features_tbx11k.csv', index=False)
 
 # 4. Visualizar
 set_publication_style()
-reg_df = compute_regional_stats(df_base, n_reg=60)
+reg_df = compute_regional_stats(df_base, n_reg=200)
 plot_regional_heatmap(reg_df)
 ```
 
@@ -295,10 +324,10 @@ plot_regional_heatmap(reg_df)
 ## Pipeline de análisis
 
 ```text
-TBX11K
+TBX11K (data/TBX11K/)
    │
    ▼
-01. Carga y construcción de metadata
+01. Carga y construcción de metadata  →  data/df_base.csv
    │
    ▼
 02. Análisis exploratorio (imágenes crudas)
@@ -312,15 +341,12 @@ TBX11K
 04. Análisis regional (6 zonas anatómicas)
    │
    ▼
-05. Extracción de características
+05. Extracción de características      →  data/features_tbx11k.csv
    │   ├── GLCM
    │   ├── LBP
    │   ├── HOG
    │   ├── Intensidad global
    │   └── Intensidad regional
-   │
-   ▼
-features_tbx11k.csv
    │
    ▼
 [Siguiente etapa] Modelado ML

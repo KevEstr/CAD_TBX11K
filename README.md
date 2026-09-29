@@ -11,6 +11,7 @@ cad-tbx11k/
 │
 ├── src/                             ← Módulo Python reutilizable (framework)
 │   ├── __init__.py                  ← Punto de entrada único del paquete
+│   ├── config.py                    ← Variables de muestreo compartidas (única fuente de verdad)
 │   ├── data.py                      ← Carga del dataset y construcción del DataFrame base
 │   ├── preprocessing.py             ← Cadena de preprocesamiento (BF + CLAHE)
 │   ├── features.py                  ← Extractores de características (GLCM, LBP, HOG, intensidad)
@@ -122,6 +123,26 @@ Cada notebook guarda sus salidas en `data/` para ser reutilizadas por los siguie
 |---|---|
 | 01 | `data/df_base.csv` |
 | 05 | `data/features_tbx11k.csv` |
+
+---
+
+## Configuración central (`src/config.py`)
+
+Todas las variables de muestreo se definen **una sola vez** en `src/config.py`. Regla del proyecto: **un nombre = un valor en todos los notebooks**. Para cambiar cuántas imágenes usa el pipeline, edita ese archivo, nunca los notebooks.
+
+| Variable | Descripción | Valor |
+|---|---|---|
+| `N_MUESTRA` | Imágenes por clase cargadas en `df_base` (techo de datos). `None` = dataset completo. | `800` |
+| `N_INTENSIDAD` | Histogramas y métricas de intensidad (notebooks 02 y 03). | `200` |
+| `N_SEGUIMIENTO` | Tabla de seguimiento antes/después del preprocesamiento (notebook 03). | `200` |
+| `N_REGIONAL` | Análisis regional por región anatómica (notebook 04). | `200` |
+| `N_MODELO` | Imágenes por clase para la extracción de features (notebook 05). `None` = clase minoritaria (muestra balanceada). | `None` |
+
+```python
+from src.config import N_MUESTRA, N_REGIONAL
+```
+
+Las variables de nivel 2 nunca superan a `N_MUESTRA`; cada notebook las acota con `min(...)`.
 
 ---
 

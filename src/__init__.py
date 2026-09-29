@@ -6,6 +6,7 @@ para el dataset TBX11K de radiografías torácicas de tuberculosis.
 
 Módulos
 -------
+config        : variables de muestreo compartidas por todo el pipeline.
 data          : carga del dataset y construcción del DataFrame base.
 preprocessing : cadena de preprocesamiento (Bilateral Filter + CLAHE).
 features      : extractores de características (GLCM, LBP, HOG, intensidad).
@@ -13,12 +14,21 @@ visualization : figuras de publicación para cada etapa del análisis.
 
 Uso rápido
 ----------
+>>> from cad_tbx11k.config import N_MUESTRA
 >>> from cad_tbx11k.data import setup_kaggle_credentials, download_dataset
 >>> from cad_tbx11k.data import get_data_root, build_base_dataframe
 >>> from cad_tbx11k.preprocessing import preprocess
 >>> from cad_tbx11k.features import extract_all_features
 >>> from cad_tbx11k.visualization import set_publication_style
 """
+
+from .config import (
+    N_MUESTRA,
+    N_INTENSIDAD,
+    N_SEGUIMIENTO,
+    N_REGIONAL,
+    N_MODELO,
+)
 
 from .data import (
     LABEL_MAP,

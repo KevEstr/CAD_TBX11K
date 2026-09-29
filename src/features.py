@@ -43,6 +43,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import entropy as scipy_entropy
 from skimage.feature import graycomatrix, graycoprops, hog, local_binary_pattern
+from skimage.filters import gabor as skimage_gabor
 from tqdm import tqdm
 
 from .preprocessing import preprocess
@@ -111,6 +112,37 @@ entre detalle y dimensionalidad dado el tamaño del dataset (8400 muestras)."""
 
 HOG_CELLS_PER_BLOCK: tuple[int, int] = (2, 2)
 """Número de celdas por bloque para la normalización HOG."""
+
+# Gabor
+GABOR_FREQUENCIES: list[float] = [0.1, 0.2, 0.3, 0.4]
+"""Frecuencias de los filtros Gabor en ciclos/píxel.
+
+Cubren desde estructuras gruesas (~10 px, p. ej. cavidades)
+hasta estructuras finas (~2.5 px, p. ej. bordes de infiltrados)."""
+
+GABOR_THETAS: list[float] = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
+"""Orientaciones de los filtros Gabor (0°, 45°, 90°, 135°).
+
+Las mismas cuatro orientaciones que se usan en GLCM,
+lo que facilita la comparación directa entre ambos descriptores."""
+
+# PHOG
+PHOG_ORIENTATIONS: int = 8
+"""Número de orientaciones del gradiente para PHOG."""
+
+PHOG_CELLS_PER_BLOCK: tuple[int, int] = (2, 2)
+"""Celdas por bloque para normalización en PHOG."""
+
+PHOG_L0_PPC: tuple[int, int] = (64, 64)
+"""pixels_per_cell en nivel 0 de PHOG (imagen 256×256 completa).
+
+Con ppc=64: 4×4 celdas → 3×3 bloques → 3×3×2×2×8 = 288 features."""
+
+PHOG_L1_PPC: tuple[int, int] = (32, 32)
+"""pixels_per_cell en nivel 1 de PHOG (cuadrantes 128×128).
+
+Con ppc=32 sobre 128×128: 4×4 celdas → 3×3 bloques → 3×3×2×2×8 = 288 features.
+4 cuadrantes × 288 = 1152 features."""
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +366,146 @@ def feat_hog(img: np.ndarray) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Extractor 6: Gabor
+# ---------------------------------------------------------------------------
+
+def feat_gabor(img: np.ndarray) -> dict:
+    """
+    Aplica un banco de filtros Gabor y resume cada respuesta con media y
+    desviación estándar de la magnitud.
+
+    Un filtro Gabor combina una sinusoide de frecuencia ``f`` orientada a
+    ``θ`` con una envolvente gaussiana.  La magnitud de la respuesta
+    ``sqrt(real² + imag²)`` mide cuánta energía tiene la imagen en esa
+    frecuencia y orientación local.
+
+    **Banco utilizado:**
+
+    - 4 frecuencias: 0.1, 0.2, 0.3, 0.4 ciclos/píxel
+      (estructuras de ~10 px hasta ~2.5 px).
+    - 4 orientaciones: 0°, 45°, 90°, 135°
+      (mismas que GLCM para comparación directa).
+
+    Por cada uno de los 4×4 = 16 filtros se calculan mean y std →
+    **32 features en total**.
+
+    Parámetros
+    ----------
+    img : np.ndarray
+        Imagen en escala de grises preprocesada (uint8, shape 256×256).
+
+    Retorna
+    -------
+    dict
+        32 entradas con el patrón ``gabor_f{freq}_t{grados}_{mean|std}``.
+
+    Referencias
+    -----------
+    - skimage gabor: https://scikit-image.org/docs/stable/api/skimage.filters.html#skimage.filters.gabor
+    - Chauhan et al.: "Role of Gist and PHOG features in computer-aided
+      diagnosis of tuberculosis without segmentation."
+    """
+    img_float = img.astype(float)
+    feats: dict = {}
+    for freq in GABOR_FREQUENCIES:
+        for theta in GABOR_THETAS:
+            real, imag = skimage_gabor(img_float, frequency=freq, theta=theta)
+            magnitude  = np.sqrt(real ** 2 + imag ** 2)
+            label = f"gabor_f{freq:.1f}_t{int(np.degrees(theta))}"
+            feats[f"{label}_mean"] = float(np.mean(magnitude))
+            feats[f"{label}_std"]  = float(np.std(magnitude))
+    return feats
+
+
+# ---------------------------------------------------------------------------
+# Extractor 7: PHOG
+# ---------------------------------------------------------------------------
+
+def _hog_region(region: np.ndarray, ppc: tuple[int, int]) -> np.ndarray:
+    """Calcula HOG sobre una región con los parámetros de PHOG."""
+    return hog(
+        region,
+        orientations=PHOG_ORIENTATIONS,
+        pixels_per_cell=ppc,
+        cells_per_block=PHOG_CELLS_PER_BLOCK,
+        block_norm="L2-Hys",
+        feature_vector=True,
+    )
+
+
+def feat_phog(img: np.ndarray) -> dict:
+    """
+    Calcula el descriptor Pyramid HOG (PHOG) en dos niveles de resolución
+    espacial.
+
+    PHOG extiende HOG añadiendo información sobre *dónde* aparecen las
+    orientaciones de gradiente en la imagen.  Esto es relevante en
+    radiografías de tórax porque la distribución espacial de las lesiones
+    (p. ej. predominio en lóbulos superiores en TB activa) aporta
+    información diagnóstica que un HOG global no captura.
+
+    **Pirámide utilizada** (sobre imagen 256×256):
+
+    .. code-block:: text
+
+        Nivel 0 — imagen completa (256×256), ppc = (64, 64)
+        ┌─────────────────────────────────────┐
+        │  HOG global → 288 features          │
+        └─────────────────────────────────────┘
+
+        Nivel 1 — 4 cuadrantes (128×128 c/u), ppc = (32, 32)
+        ┌──────────────────┬──────────────────┐
+        │  HOG → 288       │  HOG → 288       │
+        ├──────────────────┼──────────────────┤
+        │  HOG → 288       │  HOG → 288       │
+        └──────────────────┴──────────────────┘
+        4 × 288 = 1152 features
+
+    **Total: 288 + 1152 = 1440 features.**
+
+    El nivel 2 (16 cuadrantes de 64×64) no es viable porque HOG requiere
+    al menos 128×128 con los parámetros elegidos.
+
+    Parámetros
+    ----------
+    img : np.ndarray
+        Imagen en escala de grises preprocesada (uint8, shape 256×256).
+
+    Retorna
+    -------
+    dict
+        1440 entradas con el patrón ``phog_l{nivel}_{i}``.
+
+    Referencias
+    -----------
+    - Chauhan et al.: "Role of Gist and PHOG features in computer-aided
+      diagnosis of tuberculosis without segmentation."
+    - Anna Bosch et al. (2007): "Representing shape with a spatial pyramid
+      kernel."
+    """
+    h, w = img.shape
+    feats: dict = {}
+
+    # Nivel 0 — imagen completa
+    l0 = _hog_region(img, PHOG_L0_PPC)
+    for i, v in enumerate(l0):
+        feats[f"phog_l0_{i}"] = float(v)
+
+    # Nivel 1 — 4 cuadrantes de 128×128
+    idx = 0
+    for row in range(2):
+        for col in range(2):
+            roi = img[row * h // 2:(row + 1) * h // 2,
+                      col * w // 2:(col + 1) * w // 2]
+            l1 = _hog_region(roi, PHOG_L1_PPC)
+            for v in l1:
+                feats[f"phog_l1_{idx}"] = float(v)
+                idx += 1
+
+    return feats
+
+
+# ---------------------------------------------------------------------------
 # Función principal de extracción por imagen
 # ---------------------------------------------------------------------------
 
@@ -367,6 +539,8 @@ def extract_features(image_path: str, label: int, class_name: str) -> Optional[d
     row.update(feat_glcm(img))
     row.update(feat_lbp(img))
     row.update(feat_hog(img))
+    row.update(feat_gabor(img))
+    row.update(feat_phog(img))
     return row
 
 
@@ -458,12 +632,14 @@ def verify_extractors(df_base: pd.DataFrame) -> None:
     from .data import LABEL_MAP
 
     expected = {
-        "global": 4,
+        "global":   4,
         "regional": 24,
-        "GLCM": 10,
-        "LBP": 26,
-        "HOG": 1764,
-        "TOTAL": 1828,
+        "GLCM":     10,
+        "LBP":      26,
+        "HOG":      1764,
+        "Gabor":    32,
+        "PHOG":     1440,
+        "TOTAL":    3300,
     }
 
     for class_name in LABEL_MAP:
@@ -480,22 +656,28 @@ def verify_extractors(df_base: pd.DataFrame) -> None:
         gl = feat_glcm(img)
         lb = feat_lbp(img)
         hg = feat_hog(img)
-        total = len(g) + len(ri) + len(gl) + len(lb) + len(hg)
+        ga = feat_gabor(img)
+        ph = feat_phog(img)
+        total = len(g) + len(ri) + len(gl) + len(lb) + len(hg) + len(ga) + len(ph)
 
         print(
             f"{class_name:>6} | global={len(g)}  regional={len(ri)}"
-            f"  GLCM={len(gl)}  LBP={len(lb)}  HOG={len(hg)}  TOTAL={total}"
+            f"  GLCM={len(gl)}  LBP={len(lb)}  HOG={len(hg)}"
+            f"  Gabor={len(ga)}  PHOG={len(ph)}  TOTAL={total}"
         )
         assert len(g)  == expected["global"],   f"global: esperado {expected['global']}, obtenido {len(g)}"
         assert len(ri) == expected["regional"],  f"regional: esperado {expected['regional']}, obtenido {len(ri)}"
         assert len(gl) == expected["GLCM"],      f"GLCM: esperado {expected['GLCM']}, obtenido {len(gl)}"
         assert len(lb) == expected["LBP"],       f"LBP: esperado {expected['LBP']}, obtenido {len(lb)}"
         assert len(hg) == expected["HOG"],       f"HOG: esperado {expected['HOG']}, obtenido {len(hg)}"
+        assert len(ga) == expected["Gabor"],     f"Gabor: esperado {expected['Gabor']}, obtenido {len(ga)}"
+        assert len(ph) == expected["PHOG"],      f"PHOG: esperado {expected['PHOG']}, obtenido {len(ph)}"
         assert total   == expected["TOTAL"],     f"TOTAL: esperado {expected['TOTAL']}, obtenido {total}"
 
     print(f"\nEsperado: global={expected['global']}  regional={expected['regional']}"
           f"  GLCM={expected['GLCM']}  LBP={expected['LBP']}"
-          f"  HOG={expected['HOG']}  TOTAL={expected['TOTAL']}")
+          f"  HOG={expected['HOG']}  Gabor={expected['Gabor']}"
+          f"  PHOG={expected['PHOG']}  TOTAL={expected['TOTAL']}")
     print("Verificación completada sin errores.")
 
 
@@ -528,6 +710,8 @@ def get_feature_groups(features_df: pd.DataFrame) -> dict[str, list[str]]:
         "GLCM":                [c for c in feat_cols if c.startswith("glcm_")],
         "LBP":                 [c for c in feat_cols if c.startswith("lbp_")],
         "HOG":                 [c for c in feat_cols if c.startswith("hog_")],
+        "Gabor":               [c for c in feat_cols if c.startswith("gabor_")],
+        "PHOG":                [c for c in feat_cols if c.startswith("phog_")],
     }
 
 

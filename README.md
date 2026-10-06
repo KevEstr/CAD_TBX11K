@@ -235,7 +235,9 @@ img_clahe     = pasos['clahe']
 | `feat_glcm(img)` | GLCM a 4 ángulos, 64 niveles, 5 propiedades × (mean + std). | `dict` — 10 entradas |
 | `feat_lbp(img)` | Histograma LBP uniform normalizado (P=24, R=3). | `dict` — 26 entradas |
 | `feat_hog(img)` | HOG con celdas 32×32, bloques 2×2, normalización L2-Hys. | `dict` — 1764 entradas |
-| `extract_features(image_path, label, class_name)` | Pipeline completo para una sola imagen. | `dict` — 1828 + 3 entradas, o `None` |
+| `feat_gabor(img)` | Banco de 16 filtros Gabor (4 frecuencias × 4 ángulos), mean + std por filtro. | `dict` — 32 entradas |
+| `feat_phog(img)` | Pyramid HOG en 2 niveles: imagen completa (nivel 0) + 4 cuadrantes (nivel 1). | `dict` — 1440 entradas |
+| `extract_features(image_path, label, class_name)` | Pipeline completo para una sola imagen. | `dict` — 3300 + 3 entradas, o `None` |
 | `extract_all_features(df_base, sample, sample_size, random_state)` | Extracción masiva sobre el DataFrame base con barra de progreso `tqdm`. | `(pd.DataFrame, list[str])` — features y errores |
 | `verify_extractors(df_base)` | Verifica la dimensionalidad de cada extractor con `assert`. | `None` |
 | `get_feature_groups(features_df)` | Clasifica columnas por grupo de extractor. | `dict` |
@@ -250,7 +252,9 @@ img_clahe     = pasos['clahe']
 | GLCM (5 propiedades × 2 estadísticos) | 10 |
 | LBP (P=24, uniform) | 26 |
 | HOG (celdas 32×32, bloques 2×2, 9 orientaciones) | 1764 |
-| **Total** | **1828** |
+| Gabor (4 frecuencias × 4 ángulos, mean + std) | 32 |
+| PHOG (nivel 0 global + nivel 1 cuadrantes) | 1440 |
+| **Total** | **3300** |
 
 **Ejemplo:**
 
@@ -366,6 +370,8 @@ TBX11K (data/TBX11K/)
    │   ├── GLCM
    │   ├── LBP
    │   ├── HOG
+   │   ├── Gabor
+   │   ├── PHOG
    │   ├── Intensidad global
    │   └── Intensidad regional
    │

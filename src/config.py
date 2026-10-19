@@ -28,7 +28,7 @@ Ejemplo
 # Número de imágenes por clase cargadas en df_base.
 #   None -> dataset completo (~8.400 imágenes).
 #   int  -> esa cantidad por clase (modo desarrollo, más rápido).
-N_MUESTRA = None
+N_MUESTRA = 200
 
 # ---------------------------------------------------------------------------
 # Nivel 2 — Muestra consumida por cada análisis (nunca mayor que N_MUESTRA)

@@ -3,8 +3,8 @@ cad_tbx11k.features
 ====================
 Módulo de extracción de características del pipeline CAD-TBX11K.
 
-Convierte cada radiografía preprocesada en un vector numérico de 1828 características
-agrupadas en cinco grupos:
+Convierte cada radiografía preprocesada en un vector numérico de 4199 características
+agrupadas en doce grupos:
 
 +----------------------+-------------------------------------------+----------+
 | Grupo                | Qué captura                               | Features |
@@ -24,7 +24,29 @@ agrupadas en cinco grupos:
 | HOG                  | gradientes orientados —                   |     1764 |
 |                      | forma y estructura                        |          |
 +----------------------+-------------------------------------------+----------+
-| **Total**            |                                           | **1828** |
+| Gabor                | filtros de Gabor —                        |       32 |
+|                      | características de textura                |          |
++----------------------+-------------------------------------------+----------+
+| PHOG                 | HOG extendido con parámetros              |      1440|
+|                      | adicionales                               |          |
++----------------------+-------------------------------------------+----------+
+| Estadística avanzada | distribución, asimetría                   |    77    |
+|  global/regional     | y dispersión de intensidades              |          |
++----------------------+-------------------------------------------+----------+
+| GLCM multiescala     |                                           |          |
+| /regional            | textura a distintas escalas y regiones    |      270 |
+|                      |                                           |          |
++----------------------+-------------------------------------------+----------+
+| LBP multiescala      |   microtexturas a diferentes escalas      |       28 |
+|                      |                                           |          |
++----------------------+-------------------------------------------+----------+
+| Asimetría bilateral  |   diferencias entre ambos hemitórax       |        12|
+|                      |                                           |          |
++----------------------+-------------------------------------------+----------+
+| GIST                 |Estructura y contexto global de la imagen  |     512  |
+|                      |                                           |          |
++----------------------+-------------------------------------------+----------+
+| **Total**            |                                           | **4199** |
 +----------------------+-------------------------------------------+----------+
 
 Documentación de referencia
@@ -41,7 +63,7 @@ from typing import Optional
 import cv2
 import numpy as np
 import pandas as pd
-from scipy.stats import entropy as scipy_entropy
+from scipy.stats import entropy as scipy_entropy, skew, kurtosis
 from skimage.feature import graycomatrix, graycoprops, hog, local_binary_pattern
 from skimage.filters import gabor as skimage_gabor
 from tqdm import tqdm
@@ -143,6 +165,20 @@ PHOG_L1_PPC: tuple[int, int] = (32, 32)
 
 Con ppc=32 sobre 128×128: 4×4 celdas → 3×3 bloques → 3×3×2×2×8 = 288 features.
 4 cuadrantes × 288 = 1152 features."""
+
+# Features adicionales
+ADVANCED_PERCENTILES: tuple[int, ...] = (10, 25, 50, 75, 90)
+
+GLCM_DISTANCES_MS: list[int] = [1, 2, 4, 8]
+
+# La escala (24, 3) ya está representada por feat_lbp(); se agregan solo
+# escalas complementarias para evitar duplicar exactamente las mismas 26 features.
+LBP_EXTRA_SCALES: list[tuple[int, float]] = [(8, 1.0), (16, 2.0)]
+
+
+GIST_FREQUENCIES: list[float] = [0.05, 0.1, 0.2, 0.4]
+GIST_ORIENTATIONS: list[float] = [k * np.pi / 8 for k in range(8)]
+GIST_GRID: tuple[int, int] = (4, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +540,292 @@ def feat_phog(img: np.ndarray) -> dict:
 
     return feats
 
+# ---------------------------------------------------------------------------
+# Extractor 8: Estadísticas de intensidad avanzadas
+# ---------------------------------------------------------------------------
+
+def _advanced_stats(region: np.ndarray, prefix: str) -> dict:
+    """
+    Resume una distribución de intensidad mediante estadísticos robustos y
+    momentos de orden superior.
+
+    Complementa ``mean`` y ``std`` con mediana, varianza, asimetría, curtosis,
+    percentiles, rango intercuartílico (IQR), desviación absoluta mediana (MAD)
+    y coeficiente de variación. Estas medidas describen cambios en la forma del
+    histograma que pueden quedar ocultos en los cuatro estadísticos básicos.
+
+    Parámetros
+    ----------
+    region : np.ndarray
+        Imagen o región de interés en escala de grises.
+    prefix : str
+        Prefijo utilizado en los nombres de las características.
+
+    Retorna
+    -------
+    dict
+        11 características con el patrón ``{prefix}_{metrica}``.
+
+    Referencias
+    -----------
+    - scipy.stats.skew:
+      https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.skew.html
+    - scipy.stats.kurtosis:
+      https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.kurtosis.html
+    - Jaeger et al. (2013): "Automatic screening for tuberculosis in chest
+      radiographs: a survey."
+      https://pmc.ncbi.nlm.nih.gov/articles/PMC3636475/
+    """
+    x = region.astype(np.float64).ravel()
+    p10, p25, p50, p75, p90 = np.percentile(x, ADVANCED_PERCENTILES)
+    mean = float(np.mean(x))
+    std = float(np.std(x))
+    return {
+        f"{prefix}_median": float(p50),
+        f"{prefix}_variance": float(np.var(x)),
+        f"{prefix}_skewness": float(skew(x, bias=False)),
+        f"{prefix}_kurtosis": float(kurtosis(x, fisher=True, bias=False)),
+        f"{prefix}_p10": float(p10),
+        f"{prefix}_p25": float(p25),
+        f"{prefix}_p75": float(p75),
+        f"{prefix}_p90": float(p90),
+        f"{prefix}_iqr": float(p75 - p25),
+        f"{prefix}_mad": float(np.median(np.abs(x - p50))),
+        f"{prefix}_cv": float(std / (abs(mean) + 1e-9)),
+    }
+
+def feat_intensity_advanced(img: np.ndarray) -> dict:
+    """
+    Extrae estadísticas de intensidad avanzadas globales y regionales.
+
+    Calcula 11 medidas sobre la imagen completa y sobre las seis regiones
+    anatómicas de :data:`REGIONS`. El objetivo es representar diferencias en
+    la forma, dispersión y colas del histograma de intensidad que no quedan
+    descritas únicamente por media, desviación, contraste y entropía.
+
+    Parámetros
+    ----------
+    img : np.ndarray
+        Imagen preprocesada (uint8, shape 256×256).
+
+    Retorna
+    -------
+    dict
+        77 características: 11 globales + 11 × 6 regiones.
+
+    Referencias
+    -----------
+    - Jaeger et al. (2013): "Automatic screening for tuberculosis in chest
+      radiographs: a survey."
+      https://pmc.ncbi.nlm.nih.gov/articles/PMC3636475/
+    - SciPy Statistics:
+      https://docs.scipy.org/doc/scipy/reference/stats.html
+    """
+    feats = _advanced_stats(img, "adv_global")
+    for name, (x, y, w, h) in REGIONS.items():
+        feats.update(_advanced_stats(img[y:y+h, x:x+w], f"adv_{name}"))
+    return feats
+
+# ---------------------------------------------------------------------------
+# Extractor 9: GLCM multiescala y regional
+# ---------------------------------------------------------------------------
+
+def _glcm_at_distances(region: np.ndarray, distances: list[int], prefix: str) -> dict:
+    """Calcula propiedades GLCM por distancia y resume los cuatro ángulos."""
+    img64 = (region // 4).astype(np.uint8)
+    matrix = graycomatrix(
+        img64, distances=distances, angles=GLCM_ANGLES, levels=64,
+        symmetric=True, normed=True
+    )
+    feats = {}
+    for prop in GLCM_PROPS:
+        values = graycoprops(matrix, prop)
+        for i, distance in enumerate(distances):
+            vals = values[i, :]
+            key = f"{prefix}_d{distance}_{prop}"
+            feats[f"{key}_mean"] = float(np.mean(vals))
+            feats[f"{key}_std"] = float(np.std(vals))
+    return feats
+
+
+def feat_glcm_multiscale_regional(img: np.ndarray) -> dict:
+    """
+    Extrae características GLCM multiescala y regionales.
+
+    El GLCM original del proyecto utiliza distancia 1 sobre la imagen completa.
+    Esta extensión añade distancias 2, 4 y 8 a nivel global y calcula las cuatro
+    distancias 1, 2, 4 y 8 dentro de cada una de las seis regiones anatómicas.
+    Así se incorpora simultáneamente escala espacial y localización.
+
+    La distancia 1 global no se repite porque ya está representada por
+    :func:`feat_glcm`.
+
+    Parámetros
+    ----------
+    img : np.ndarray
+        Imagen preprocesada (uint8, shape 256×256).
+
+    Retorna
+    -------
+    dict
+        270 características: 30 globales adicionales + 40 × 6 regiones.
+
+    Referencias
+    -----------
+    - skimage.feature.graycomatrix:
+      https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.graycomatrix
+    - Chauhan et al. (2014): "Role of Gist and PHOG Features in
+      Computer-Aided Diagnosis of Tuberculosis without Segmentation."
+      https://pmc.ncbi.nlm.nih.gov/articles/PMC4229306/
+    """
+    feats = _glcm_at_distances(img, [2, 4, 8], "glcm_ms_global")
+    for name, (x, y, w, h) in REGIONS.items():
+        feats.update(_glcm_at_distances(
+            img[y:y+h, x:x+w], GLCM_DISTANCES_MS, f"glcm_ms_{name}"
+        ))
+    return feats
+
+# ---------------------------------------------------------------------------
+# Extractor 10: LBP multiescala
+# ---------------------------------------------------------------------------
+
+def feat_lbp_multiscale(img: np.ndarray) -> dict:
+    """
+    Añade Local Binary Patterns en escalas complementarias.
+
+    El extractor original ya representa P=24, R=3. Para evitar duplicación,
+    esta función agrega únicamente (P,R)=(8,1) y (16,2), capturando
+    microtexturas más finas y de escala intermedia. Se mantiene el método
+    ``uniform`` y el histograma normalizado.
+
+    Parámetros
+    ----------
+    img : np.ndarray
+        Imagen preprocesada (uint8, shape 256×256).
+
+    Retorna
+    -------
+    dict
+        28 características: 10 bins para (8,1) y 18 para (16,2).
+
+    Referencias
+    -----------
+    - Ojala et al. (2002): "Multiresolution Gray-Scale and Rotation Invariant
+      Texture Classification with Local Binary Patterns."
+    - Jaeger et al. (2013):
+      https://pmc.ncbi.nlm.nih.gov/articles/PMC3636475/
+    - skimage.feature.local_binary_pattern:
+      https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.local_binary_pattern
+    """
+    feats = {}
+    for p, r in LBP_EXTRA_SCALES:
+        lbp_img = local_binary_pattern(img, P=p, R=r, method="uniform")
+        bins = p + 2
+        hist, _ = np.histogram(
+            lbp_img.ravel(), bins=bins, range=(0, bins), density=True
+        )
+        for i, value in enumerate(hist):
+            feats[f"lbp_ms_p{p}_r{int(r)}_{i}"] = float(value)
+    return feats
+
+# ---------------------------------------------------------------------------
+# Extractor 11: Asimetría bilateral
+# ---------------------------------------------------------------------------
+
+def feat_bilateral_asymmetry(img: np.ndarray) -> dict:
+    """
+    Cuantifica diferencias relativas entre regiones izquierda y derecha.
+
+    Compara SI-SD, MI-MD e II-ID para media, desviación, contraste y entropía.
+    La asimetría se expresa como ``|L-R| / (|L|+|R|+eps)``, convirtiendo la
+    comparación entre ambos hemitórax en variables explícitas y normalizadas.
+
+    Parámetros
+    ----------
+    img : np.ndarray
+        Imagen preprocesada (uint8, shape 256×256).
+
+    Retorna
+    -------
+    dict
+        12 características: 3 pares anatómicos × 4 métricas.
+
+    Referencias
+    -----------
+    - Jaeger et al. (2013): revisión de CAD para TB y análisis de campos
+      pulmonares. https://pmc.ncbi.nlm.nih.gov/articles/PMC3636475/
+    """
+    regional = feat_intensity_regional(img)
+    pairs = {
+        "superior": ("SI", "SD"),
+        "middle": ("MI", "MD"),
+        "inferior": ("II", "ID"),
+    }
+    feats = {}
+    for pair_name, (left, right) in pairs.items():
+        for metric in ("mean", "std", "contrast", "entropy"):
+            l = regional[f"{left}_{metric}"]
+            r = regional[f"{right}_{metric}"]
+            feats[f"asym_{pair_name}_{metric}"] = float(
+                abs(l - r) / (abs(l) + abs(r) + 1e-9)
+            )
+    return feats
+
+# ---------------------------------------------------------------------------
+# Extractor 12: GIST espacial multiescala
+# ---------------------------------------------------------------------------
+
+def feat_gist(img: np.ndarray) -> dict:
+    """
+    Extrae una representación GIST basada en energía Gabor espacial.
+
+    Se filtra la radiografía a cuatro frecuencias y ocho orientaciones. La
+    magnitud de cada respuesta se agrega sobre una cuadrícula 4×4, produciendo
+    una descripción compacta del contexto global, las frecuencias dominantes,
+    sus orientaciones y su localización espacial.
+
+    Esta implementación sigue el principio de GIST utilizado en literatura de
+    CAD de TB, pero está implementada con ``skimage.filters.gabor`` para
+    mantener coherencia con las dependencias del proyecto.
+
+    Parámetros
+    ----------
+    img : np.ndarray
+        Imagen preprocesada (uint8, shape 256×256).
+
+    Retorna
+    -------
+    dict
+        512 características: 4 frecuencias × 8 orientaciones × 16 bloques.
+
+    Referencias
+    -----------
+    - Chauhan et al. (2014): "Role of Gist and PHOG Features in
+      Computer-Aided Diagnosis of Tuberculosis without Segmentation."
+      https://pmc.ncbi.nlm.nih.gov/articles/PMC4229306/
+    - skimage.filters.gabor:
+      https://scikit-image.org/docs/stable/api/skimage.filters.html#skimage.filters.gabor
+    """
+    image = img.astype(np.float64) / 255.0
+    h, w = img.shape
+    rows, cols = GIST_GRID
+    feats = {}
+
+    for freq in GIST_FREQUENCIES:
+        for theta in GIST_ORIENTATIONS:
+            real, imag = skimage_gabor(image, frequency=freq, theta=theta)
+            magnitude = np.sqrt(real ** 2 + imag ** 2)
+            block_idx = 0
+            for row in range(rows):
+                y0, y1 = row * h // rows, (row + 1) * h // rows
+                for col in range(cols):
+                    x0, x1 = col * w // cols, (col + 1) * w // cols
+                    angle10 = int(round(np.degrees(theta) * 10))
+                    feats[f"gist_f{freq:.2f}_t{angle10}_b{block_idx}"] = float(
+                        np.mean(magnitude[y0:y1, x0:x1])
+                    )
+                    block_idx += 1
+    return feats
 
 # ---------------------------------------------------------------------------
 # Función principal de extracción por imagen
@@ -526,7 +848,7 @@ def extract_features(image_path: str, label: int, class_name: str) -> Optional[d
     Retorna
     -------
     dict o None
-        Diccionario con los metadatos de la imagen y las 1828 características,
+        Diccionario con metadatos y las 4248 características extraídas,
         o ``None`` si la imagen no puede cargarse o procesarse.
     """
     img = preprocess(image_path)
@@ -541,6 +863,11 @@ def extract_features(image_path: str, label: int, class_name: str) -> Optional[d
     row.update(feat_hog(img))
     row.update(feat_gabor(img))
     row.update(feat_phog(img))
+    row.update(feat_intensity_advanced(img))
+    row.update(feat_glcm_multiscale_regional(img))
+    row.update(feat_lbp_multiscale(img))
+    row.update(feat_bilateral_asymmetry(img))
+    row.update(feat_gist(img))
     return row
 
 
@@ -572,7 +899,7 @@ def extract_all_features(
     Retorna
     -------
     features_df : pd.DataFrame
-        DataFrame con una fila por imagen y las 1828 + 3 columnas (metadatos + features).
+        DataFrame con una fila por imagen y las 4248 + 3 columnas (metadatos + features).
     errors : list de str
         Lista de rutas de imágenes que no pudieron procesarse.
 
@@ -616,8 +943,10 @@ def extract_all_features(
 
 def verify_extractors(df_base: pd.DataFrame) -> None:
     """
-    Verifica que cada extractor produce el número correcto de características
-    sobre una imagen de muestra de cada clase.
+    Verifica el número de características producido por cada extractor.
+
+    Ejecuta todos los extractores sobre una imagen de muestra de cada clase y
+    comprueba tanto las dimensiones individuales como el total esperado.
 
     Parámetros
     ----------
@@ -627,58 +956,47 @@ def verify_extractors(df_base: pd.DataFrame) -> None:
     Raises
     ------
     AssertionError
-        Si algún extractor no produce la cantidad esperada de características.
+        Si algún extractor no produce la cantidad esperada.
     """
     from .data import LABEL_MAP
 
     expected = {
-        "global":   4,
-        "regional": 24,
-        "GLCM":     10,
-        "LBP":      26,
-        "HOG":      1764,
-        "Gabor":    32,
-        "PHOG":     1440,
-        "TOTAL":    3300,
+        "global": 4, "regional": 24, "GLCM": 10, "LBP": 26,
+        "HOG": 1764, "Gabor": 32, "PHOG": 1440,
+        "Advanced": 77, "GLCM_MS": 270, "LBP_MS": 28,
+        "Asymmetry": 12, "GIST": 512,
+        "TOTAL": 4199,
     }
 
     for class_name in LABEL_MAP:
         sample = df_base[df_base["class_name"] == class_name]
         if sample.empty:
             continue
-        path = sample.iloc[0]["image_path"]
-        img = preprocess(path)
-        assert img is not None, f"No se pudo preprocesar la imagen de {class_name}."
-        assert img.shape == (256, 256), f"Shape inesperado: {img.shape}."
+        img = preprocess(sample.iloc[0]["image_path"])
+        assert img is not None
+        assert img.shape == (256, 256)
 
-        g  = feat_intensity_global(img)
-        ri = feat_intensity_regional(img)
-        gl = feat_glcm(img)
-        lb = feat_lbp(img)
-        hg = feat_hog(img)
-        ga = feat_gabor(img)
-        ph = feat_phog(img)
-        total = len(g) + len(ri) + len(gl) + len(lb) + len(hg) + len(ga) + len(ph)
+        groups = {
+            "global": feat_intensity_global(img),
+            "regional": feat_intensity_regional(img),
+            "GLCM": feat_glcm(img),
+            "LBP": feat_lbp(img),
+            "HOG": feat_hog(img),
+            "Gabor": feat_gabor(img),
+            "PHOG": feat_phog(img),
+            "Advanced": feat_intensity_advanced(img),
+            "GLCM_MS": feat_glcm_multiscale_regional(img),
+            "LBP_MS": feat_lbp_multiscale(img),
+            "Asymmetry": feat_bilateral_asymmetry(img),
+            "GIST": feat_gist(img),
+        }
+        total = sum(len(v) for v in groups.values())
+        print(class_name, " | ".join(f"{k}={len(v)}" for k, v in groups.items()), f"TOTAL={total}")
+        for key, values in groups.items():
+            assert len(values) == expected[key], f"{key}: esperado {expected[key]}, obtenido {len(values)}"
+        assert total == expected["TOTAL"], f"TOTAL: esperado {expected['TOTAL']}, obtenido {total}"
 
-        print(
-            f"{class_name:>6} | global={len(g)}  regional={len(ri)}"
-            f"  GLCM={len(gl)}  LBP={len(lb)}  HOG={len(hg)}"
-            f"  Gabor={len(ga)}  PHOG={len(ph)}  TOTAL={total}"
-        )
-        assert len(g)  == expected["global"],   f"global: esperado {expected['global']}, obtenido {len(g)}"
-        assert len(ri) == expected["regional"],  f"regional: esperado {expected['regional']}, obtenido {len(ri)}"
-        assert len(gl) == expected["GLCM"],      f"GLCM: esperado {expected['GLCM']}, obtenido {len(gl)}"
-        assert len(lb) == expected["LBP"],       f"LBP: esperado {expected['LBP']}, obtenido {len(lb)}"
-        assert len(hg) == expected["HOG"],       f"HOG: esperado {expected['HOG']}, obtenido {len(hg)}"
-        assert len(ga) == expected["Gabor"],     f"Gabor: esperado {expected['Gabor']}, obtenido {len(ga)}"
-        assert len(ph) == expected["PHOG"],      f"PHOG: esperado {expected['PHOG']}, obtenido {len(ph)}"
-        assert total   == expected["TOTAL"],     f"TOTAL: esperado {expected['TOTAL']}, obtenido {total}"
-
-    print(f"\nEsperado: global={expected['global']}  regional={expected['regional']}"
-          f"  GLCM={expected['GLCM']}  LBP={expected['LBP']}"
-          f"  HOG={expected['HOG']}  Gabor={expected['Gabor']}"
-          f"  PHOG={expected['PHOG']}  TOTAL={expected['TOTAL']}")
-    print("Verificación completada sin errores.")
+    print(f"Verificación completada. Total esperado: {expected['TOTAL']} features.")
 
 
 # ---------------------------------------------------------------------------
@@ -705,15 +1023,19 @@ def get_feature_groups(features_df: pd.DataFrame) -> dict[str, list[str]]:
     feat_cols = [c for c in features_df.columns if c not in meta_cols]
 
     return {
-        "Intensidad global":   [c for c in feat_cols if c in {"mean", "std", "contrast", "entropy"}],
-        "Intensidad regional": [c for c in feat_cols if any(c.startswith(r) for r in REGIONS)],
-        "GLCM":                [c for c in feat_cols if c.startswith("glcm_")],
-        "LBP":                 [c for c in feat_cols if c.startswith("lbp_")],
-        "HOG":                 [c for c in feat_cols if c.startswith("hog_")],
-        "Gabor":               [c for c in feat_cols if c.startswith("gabor_")],
-        "PHOG":                [c for c in feat_cols if c.startswith("phog_")],
+        "Intensidad global": [c for c in feat_cols if c in {"mean", "std", "contrast", "entropy"}],
+        "Intensidad regional": [c for c in feat_cols if any(c.startswith(r + "_") for r in REGIONS)],
+        "GLCM": [c for c in feat_cols if c.startswith("glcm_") and not c.startswith("glcm_ms_")],
+        "LBP": [c for c in feat_cols if c.startswith("lbp_") and not c.startswith("lbp_ms_")],
+        "HOG": [c for c in feat_cols if c.startswith("hog_")],
+        "Gabor": [c for c in feat_cols if c.startswith("gabor_")],
+        "PHOG": [c for c in feat_cols if c.startswith("phog_")],
+        "Estadística avanzada": [c for c in feat_cols if c.startswith("adv_")],
+        "GLCM multiescala/regional": [c for c in feat_cols if c.startswith("glcm_ms_")],
+        "LBP multiescala": [c for c in feat_cols if c.startswith("lbp_ms_")],
+        "Asimetría bilateral": [c for c in feat_cols if c.startswith("asym_")],
+        "GIST": [c for c in feat_cols if c.startswith("gist_")],
     }
-
 
 def print_feature_summary(features_df: pd.DataFrame) -> None:
     """

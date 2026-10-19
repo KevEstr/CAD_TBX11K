@@ -28,7 +28,7 @@ Ejemplo
 # Número de imágenes por clase cargadas en df_base.
 #   None -> dataset completo (~8.400 imágenes).
 #   int  -> esa cantidad por clase (modo desarrollo, más rápido).
-N_MUESTRA = 800
+N_MUESTRA = None
 
 # ---------------------------------------------------------------------------
 # Nivel 2 — Muestra consumida por cada análisis (nunca mayor que N_MUESTRA)
@@ -44,6 +44,8 @@ N_SEGUIMIENTO = 200
 N_REGIONAL = 200
 
 # Extracción de características para el modelo (notebook 05).
-#   None -> usa la clase minoritaria (muestra balanceada; comportamiento actual).
-#   int  -> esa cantidad por clase, acotada además por la clase minoritaria.
+#   None -> dataset completo: TODAS las imágenes de df_base (recomendado).
+#   int  -> esa cantidad por clase (modo desarrollo, submuestreo rápido).
+# No se balancean las clases aquí: el desbalanceo real del dataset se
+# conserva y se aborda en el notebook 07 (class_weight / SMOTE).
 N_MODELO = None

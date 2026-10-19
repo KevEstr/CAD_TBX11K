@@ -132,11 +132,11 @@ Todas las variables de muestreo se definen **una sola vez** en `src/config.py`. 
 
 | Variable | Descripción | Valor |
 |---|---|---|
-| `N_MUESTRA` | Imágenes por clase cargadas en `df_base` (techo de datos). `None` = dataset completo. | `800` |
+| `N_MUESTRA` | Imágenes por clase cargadas en `df_base` (techo de datos). `None` = dataset completo. | `None` |
 | `N_INTENSIDAD` | Histogramas y métricas de intensidad (notebooks 02 y 03). | `200` |
 | `N_SEGUIMIENTO` | Tabla de seguimiento antes/después del preprocesamiento (notebook 03). | `200` |
 | `N_REGIONAL` | Análisis regional por región anatómica (notebook 04). | `200` |
-| `N_MODELO` | Imágenes por clase para la extracción de features (notebook 05). `None` = clase minoritaria (muestra balanceada). | `None` |
+| `N_MODELO` | Imágenes por clase para la extracción de features (notebook 05). `None` = dataset completo (todas las imágenes). | `None` |
 
 ```python
 from src.config import N_MUESTRA, N_REGIONAL
@@ -263,12 +263,12 @@ from src.features import extract_all_features, verify_extractors
 
 verify_extractors(df_base)
 
-N_POR_CLASE = df_base['class_name'].value_counts().min()
-features_df, errores = extract_all_features(df_base, sample=True, sample_size=N_POR_CLASE)
-
-# Extracción completa
+# Extracción completa (recomendada): usa todas las imágenes de df_base
 features_df, errores = extract_all_features(df_base, sample=False)
 features_df.to_csv('../data/features_tbx11k.csv', index=False)
+
+# Modo desarrollo: submuestreo de N imágenes por clase (más rápido)
+features_df, errores = extract_all_features(df_base, sample=True, sample_size=800)
 ```
 
 ---

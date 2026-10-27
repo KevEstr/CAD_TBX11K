@@ -22,7 +22,11 @@ cad-tbx11k/
 │   ├── 02_Analisis_Exploratorio.ipynb
 │   ├── 03_Preprocesamiento.ipynb
 │   ├── 04_Analisis_Regional.ipynb
-│   └── 05_Extraccion_Caracteristicas.ipynb
+│   ├── 05_Extraccion_Caracteristicas.ipynb
+│   ├── 06_Seleccion_Caracteristicas.ipynb
+│   ├── 07_Desbalanceo.ipynb
+│   ├── 08_Modelos_ML.ipynb
+│   └── 09_Evaluacion_Comparativa.ipynb
 │
 ├── data/                            ← Dataset y archivos generados (excluido de Git)
 │   ├── TBX11K/                      ← Dataset descargado manualmente desde Kaggle
@@ -50,7 +54,7 @@ El proyecto utiliza **TBX11K**, un dataset de radiografías de tórax desarrolla
 **Fuente:** [TBX11K — mmcheng.net](https://mmcheng.net/tb/)  
 **Kaggle:** [usmanshams/tbx-11](https://www.kaggle.com/datasets/usmanshams/tbx-11)
 
-El subconjunto utilizado corresponde a **8.400 radiografías etiquetadas** de los conjuntos de entrenamiento y validación, organizadas en tres clases:
+El subconjunto utilizado corresponde a **8.400 radiografías etiquetadas** (8274 tras eliminar duplicados exactos) de los conjuntos de entrenamiento y validación, organizadas en tres clases:
 
 | Clase    | Etiqueta | Descripción                                         |
 |----------|:--------:|-----------------------------------------------------|
@@ -114,7 +118,8 @@ Si la red permite conexión a Kaggle, descargar `kaggle.json` desde **kaggle.com
 ## Orden de ejecución
 
 ```text
-01 → 02 → 03 → 04 → 05
+01 → 02 → 03 → 04 → 05    (datos y características)
+06 → 07 → 08 → 09          (selección, desbalanceo, modelado y evaluación)
 ```
 
 Cada notebook guarda sus salidas en `data/` para ser reutilizadas por los siguientes:
@@ -123,6 +128,38 @@ Cada notebook guarda sus salidas en `data/` para ser reutilizadas por los siguie
 |---|---|
 | 01 | `data/df_base.csv` |
 | 05 | `data/features_tbx11k.csv` |
+| 06 | `X_full.npy`, `y_full.npy`, `full_meta.csv`, `06_seleccion.json`, `06_cv_resultados.csv`, `06_cv_por_fold.csv`, `06_selected_feature_names.json`, `06_scores.csv`, `06_redundancia_hog_phog.json` |
+| 07 | `07_estrategia.json`, `07_cv_resultados.csv`, `07_cv_por_fold.csv` |
+| 08 | `models/08_*.joblib`, `08_manifest.json`, `08_cv_resumen.csv`, `08_cv_por_fold.csv`, `08_mejores_params.json`, `08_oof_predicciones.csv`, `08_oof_scores.npz` |
+| 09 | `09_resultados_globales.csv`, `09_resultados_por_clase.csv`, `09_calibracion.csv`, `09_recomendacion.json` |
+
+---
+
+## Modelado y evaluación (06–09)
+
+- **06** deduplica sobre las 8400 y usa **las 8274 imágenes** con CV 5-fold. La selección
+  de features se ajusta **dentro de cada fold** y la regla 1-SE usa el error estándar.
+- **07** elige la estrategia de desbalanceo por CV 5-fold sobre las 8274, con el selector
+  del 06 ajustado dentro de cada fold.
+- **08** entrena cinco modelos + Dummy con CV anidada 5×3 y selector dentro de cada fold
+  externo. Genera predicciones **out-of-fold** para las 8274 y modelos finales con todas.
+- **09** evalúa las predicciones out-of-fold: métricas globales y por clase, ROC/AP,
+  matrices de confusión, bootstrap, McNemar (global y `tb`) con Holm y calibración.
+
+**Protocolo:** no hay hold-out ni test separado. Todas las imágenes participan en la CV;
+la estimación es out-of-fold y el modelo final se entrena con las 8274.
+
+**Limitaciones:** la CV no equivale a una prueba externa independiente; no hay
+identificadores de paciente; los resultados no son directamente comparables con el
+benchmark oficial de TBX11K (6600/1800/2800). `AP` es Average Precision, no el área
+trapezoidal de la curva PR. La estrategia de desbalanceo se eligió con LR (decisión
+práctica, no óptima por modelo); `N` se fijó con la CV del 06 y no se retunea dentro de
+cada fold del 08; la selección de modelo y su estimación comparten las predicciones OOF
+(optimismo leve). La comparación de preprocesamiento del notebook 03 es un experimento
+controlado sobre un subconjunto. Las métricas OOF son la estimación de la CV; el modelo
+final se entrena con las 8274 y su rendimiento en datos independientes es desconocido. La
+estimación OOF del procedimiento completo (selector + hiperparámetros + selección de
+modelo) está en 08_procedimiento.json.
 
 ---
 
@@ -135,7 +172,7 @@ Todas las variables de muestreo se definen **una sola vez** en `src/config.py`. 
 | `N_MUESTRA` | Imágenes por clase cargadas en `df_base` (techo de datos). `None` = dataset completo. | `None` |
 | `N_INTENSIDAD` | Histogramas y métricas de intensidad (notebooks 02 y 03). | `200` |
 | `N_SEGUIMIENTO` | Tabla de seguimiento antes/después del preprocesamiento (notebook 03). | `200` |
-| `N_REGIONAL` | Análisis regional por región anatómica (notebook 04). | `200` |
+| `N_REGIONAL` | Análisis regional por región espacial (rectángulo) (notebook 04). | `200` |
 | `N_MODELO` | Imágenes por clase para la extracción de features (notebook 05). `None` = dataset completo (todas las imágenes). | `None` |
 
 ```python
@@ -224,14 +261,14 @@ img_clahe     = pasos['clahe']
 
 | Función / Constante | Descripción | Retorna |
 |---|---|---|
-| `REGIONS` | Definición de las 6 regiones anatómicas `{nombre: (x, y, w, h)}` | `dict` |
+| `REGIONS` | Definición de las 6 regiones espaciales (rectángulos) `{nombre: (x, y, w, h)}` | `dict` |
 | `GLCM_PROPS` | Propiedades GLCM calculadas | `list` |
 | `LBP_P` | Puntos de muestreo LBP (`24`) | `int` |
 | `LBP_R` | Radio LBP (`3.0`) | `float` |
 | `LBP_BINS` | Bins del histograma LBP (`26`) | `int` |
 | `HOG_PIXELS_PER_CELL` | Tamaño de celda HOG `(32, 32)` | `tuple` |
 | `feat_intensity_global(img)` | Calcula `mean`, `std`, `contrast`, `entropy` sobre la imagen completa. | `dict` — 4 entradas |
-| `feat_intensity_regional(img)` | Calcula las 4 métricas en cada una de las 6 regiones anatómicas. | `dict` — 24 entradas |
+| `feat_intensity_regional(img)` | Calcula las 4 métricas en cada una de las 6 regiones espaciales (rectángulos). | `dict` — 24 entradas |
 | `feat_glcm(img)` | GLCM a 4 ángulos, 64 niveles, 5 propiedades × (mean + std). | `dict` — 10 entradas |
 | `feat_lbp(img)` | Histograma LBP uniform normalizado (P=24, R=3). | `dict` — 26 entradas |
 | `feat_hog(img)` | HOG con celdas 32×32, bloques 2×2, normalización L2-Hys. | `dict` — 1764 entradas |
@@ -295,7 +332,7 @@ Las funciones con muestras ajustan automáticamente el tamaño si hay menos imá
 | `plot_preprocessing_steps(df_base, save_path)` | 03 | Cuadrícula 3×3: original / BF / BF+CLAHE por clase. |
 | `plot_histogram_comparison(df_base, class_name, save_path)` | 03 | Histogramas antes y después del preprocesamiento para una clase. |
 | `build_preprocessing_stats_table(df_base, n_sample, random_state)` | 03 | Tabla `(Class, Stage)` con métricas promedio antes y después del preprocesamiento. |
-| `plot_regions_on_images(df_base, save_path)` | 04 | Bordes de las 6 regiones anatómicas sobre imágenes preprocesadas. |
+| `plot_regions_on_images(df_base, save_path)` | 04 | Bordes de las 6 regiones espaciales (rectángulos) sobre imágenes preprocesadas. |
 | `compute_regional_stats(df_base, n_reg, random_state)` | 04 | Intensidad media por región para una muestra por clase. Retorna `pd.DataFrame`. |
 | `plot_regional_heatmap(reg_df, save_path)` | 04 | Mapa de calor de intensidad media por región y clase. |
 | `plot_regional_distributions(reg_df, save_path)` | 04 | Panel 2×3 con eje Y compartido (`sharey=True`) para comparación directa entre regiones. |
@@ -363,7 +400,7 @@ TBX11K (data/TBX11K/)
    │   └── CLAHE
    │
    ▼
-04. Análisis regional (6 zonas anatómicas)
+04. Análisis regional (6 zonas espaciales (rectángulos))
    │
    ▼
 05. Extracción de características      →  data/features_tbx11k.csv

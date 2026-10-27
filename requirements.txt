@@ -1,28 +1,31 @@
 # cad-tbx11k — dependencias del pipeline
 # Instalar con: pip install -r requirements.txt
 #
-# Se recomienda usar un entorno virtual:
-#   python -m venv venv
-#   venv\Scripts\activate          (Windows)
-#   source venv/bin/activate       (macOS/Linux)
+# Versiones fijadas a las usadas en la ejecución de referencia (octubre 2026).
 
 # --- Dataset ---
 kagglehub>=0.3.0
 
 # --- Procesamiento de imágenes ---
-opencv-python>=4.9.0
+opencv-python==5.0.0
 Pillow>=10.0.0
 
 # --- Extracción de características ---
-scikit-image>=0.22.0
-scipy>=1.12.0
+scikit-image==0.26.0
+scipy==1.18.1
 
 # --- Datos y análisis ---
-numpy>=1.26.0
-pandas>=2.2.0
+numpy==2.5.3
+pandas==3.0.5
+
+# --- Modelado ---
+scikit-learn==1.9.1
+imbalanced-learn==0.14.2
+xgboost==3.4.1
+joblib==1.6.0
 
 # --- Visualización ---
-matplotlib>=3.8.0
+matplotlib==3.11.2
 seaborn>=0.13.0
 
 # --- Progreso ---

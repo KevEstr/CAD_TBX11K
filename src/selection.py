@@ -8,6 +8,8 @@ ajustarse con el fold de validación ni con el conjunto completo antes de la
 validación cruzada.
 """
 
+from functools import partial
+
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.ensemble import RandomForestClassifier
@@ -67,7 +69,10 @@ def build_selector(method, n_features, random_state=42, n_estimators=100, n_jobs
             ('sel', SelectKBest(chi2, k=n_features)),
         ])
     if method == 'MI':
-        return SelectKBest(mutual_info_classif, k=n_features)
+        return SelectKBest(
+            partial(mutual_info_classif, random_state=random_state),
+            k=n_features,
+        )
     raise ValueError(f'Método de selección desconocido: {method}')
 
 

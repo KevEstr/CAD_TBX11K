@@ -13,7 +13,7 @@ cad-tbx11k/
 │   ├── __init__.py                  ← Punto de entrada único del paquete
 │   ├── config.py                    ← Variables de muestreo compartidas (única fuente de verdad)
 │   ├── data.py                      ← Carga del dataset y construcción del DataFrame base
-│   ├── preprocessing.py             ← Cadena de preprocesamiento (BF + CLAHE)
+│   ├── preprocessing.py             ← Segmentación pulmonar + BF + CLAHE
 │   ├── features.py                  ← Extractores de características (GLCM, LBP, HOG, intensidad)
 │   └── visualization.py             ← Figuras de publicación para cada etapa del análisis
 │
@@ -149,7 +149,8 @@ Cada notebook guarda sus salidas en `data/` para ser reutilizadas por los siguie
 **Protocolo:** no hay hold-out ni test separado. Todas las imágenes participan en la CV;
 la estimación es out-of-fold y el modelo final se entrena con las 8274.
 
-**Limitaciones:** la CV no equivale a una prueba externa independiente; no hay
+**Limitaciones:** la segmentación pulmonar es heurística (Otsu + morfología + componentes
+conectados), no una segmentación clínica validada; la CV no equivale a una prueba externa independiente; no hay
 identificadores de paciente; los resultados no son directamente comparables con el
 benchmark oficial de TBX11K (6600/1800/2800). `AP` es Average Precision, no el área
 trapezoidal de la curva PR. La estrategia de desbalanceo se eligió con LR (decisión

@@ -22,6 +22,7 @@ from typing import Optional, Tuple
 
 import cv2
 import numpy as np
+from scipy.ndimage import binary_fill_holes
 
 # ---------------------------------------------------------------------------
 # Parámetros por defecto del pipeline
@@ -48,6 +49,12 @@ Valores altos permiten mayor realce de contraste pero pueden amplificar ruido.""
 CLAHE_TILE_GRID: Tuple[int, int] = (8, 8)
 """Tamaño de la cuadrícula de teselas para CLAHE.
 Cada tesela recibe su propia ecualización de histograma."""
+
+SEG_MIN_AREA: int = 500
+"""Área mínima (px) de una componente para considerarla un pulmón."""
+
+SEG_MAX_CY: float = 200.0
+"""Centroide vertical máximo para aceptar una componente como pulmón."""
 
 
 # ---------------------------------------------------------------------------
@@ -179,24 +186,98 @@ def apply_clahe(
     return clahe.apply(img)
 
 
+def segment_lungs(img: np.ndarray) -> np.ndarray:
+    """
+    Segmentación heurística del campo pulmonar sobre una imagen 256×256.
+
+    Pasos:
+    1. Umbral de Otsu invertido para aislar regiones oscuras (pulmones).
+    2. Eliminación de componentes que tocan el borde (fondo/fuera del cuerpo).
+    3. Selección de la componente lateral izquierda y derecha más grandes.
+    4. Relleno de huecos y dilatación suave.
+
+    Es una segmentación **heurística**, no una segmentación clínica validada.
+    Se usa para excluir el fondo antes de extraer características.
+
+    Parámetros
+    ----------
+    img : np.ndarray
+        Imagen en escala de grises, ya redimensionada a :data:`IMG_SIZE`.
+
+    Retorna
+    -------
+    np.ndarray
+        Máscara booleana con ``True`` en el campo pulmonar aproximado.
+
+    Referencias
+    -----------
+    - Otsu (1979): "A threshold selection method from gray-level histograms."
+    - OpenCV connected components: https://docs.opencv.org/4.x/d3/dc0/group__imgproc__shape.html
+    """
+    blur = cv2.GaussianBlur(img, (5, 5), 0)
+    _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    n, labels, stats, cent = cv2.connectedComponentsWithStats(th, 8)
+    h, w = img.shape
+    candidatos = []
+
+    for i in range(1, n):
+        x, y0, w0, h0, area = stats[i]
+        if area < SEG_MIN_AREA:
+            continue
+        if x == 0 or y0 == 0 or x + w0 == w or y0 + h0 == h:
+            continue
+        cx, cy = cent[i]
+        if cy > SEG_MAX_CY:
+            continue
+        candidatos.append((area, i, cx, cy))
+
+    izquierda = [c for c in candidatos if c[2] < w / 2]
+    derecha = [c for c in candidatos if c[2] >= w / 2]
+    keep = []
+    if izquierda:
+        keep.append(max(izquierda, key=lambda x: x[0])[1])
+    if derecha:
+        keep.append(max(derecha, key=lambda x: x[0])[1])
+
+    if not keep:
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.ellipse(mask, (w // 2, h // 2), (w // 3, h // 3), 0, 0, 360, 1, -1)
+        return mask.astype(bool)
+
+    mask = np.isin(labels, keep)
+    mask = binary_fill_holes(mask)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
+    return mask.astype(bool)
+
+
 # ---------------------------------------------------------------------------
 # Pipeline completo
 # ---------------------------------------------------------------------------
 
-def preprocess(path: str) -> Optional[np.ndarray]:
+def preprocess(path: str, segmentar: bool = True) -> Optional[np.ndarray]:
     """
     Ejecuta la cadena completa de preprocesamiento sobre una imagen.
 
     Pasos:
     1. Carga en escala de grises.
     2. Resize a :data:`IMG_SIZE` con interpolación de área.
-    3. Bilateral Filter (suavizado preservando bordes).
-    4. CLAHE (realce de contraste local).
+    3. Segmentación heurística del campo pulmonar y enmascarado del fondo.
+    4. Bilateral Filter (suavizado preservando bordes).
+    5. CLAHE (realce de contraste local).
+
+    El fondo se reemplaza por 0 para que la extracción de características
+    no dependa del contexto fuera del pulmón.
 
     Parámetros
     ----------
     path : str
         Ruta al archivo de imagen original.
+    segmentar : bool
+        Si es ``True`` (por defecto), enmascara el fondo con la segmentación
+        pulmonar. Si es ``False``, mantiene la imagen completa (útil para
+        análisis de sesgo de contexto).
 
     Retorna
     -------
@@ -208,8 +289,14 @@ def preprocess(path: str) -> Optional[np.ndarray]:
     if img is None:
         return None
     img = resize_image(img)
+
+    mask = segment_lungs(img) if segmentar else None
+
     img = apply_bilateral_filter(img)
     img = apply_clahe(img)
+
+    if segmentar:
+        img = np.where(mask, img, 0).astype(np.uint8)
     return img
 
 

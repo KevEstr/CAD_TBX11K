@@ -1,8 +1,8 @@
 {
   "estrategia": "class_weight",
   "selector": {
-    "metodo": "RF",
-    "n_features": 1000
+    "metodo": "MI",
+    "n_features": 2000
   },
   "modelos": {
     "Logistic Regression": "08_logistic_regression.joblib",
@@ -11,7 +11,7 @@
     "Random Forest": "08_random_forest.joblib",
     "XGBoost": "08_xgboost.joblib"
   },
-  "seleccionado_cv": "SVM",
+  "seleccionado_cv": "XGBoost",
   "mejores_params": {
     "Logistic Regression": {
       "clf__C": 0.003
@@ -24,7 +24,7 @@
       "clf__max_depth": 6
     },
     "Random Forest": {
-      "clf__max_features": 0.1,
+      "clf__max_features": 0.2,
       "clf__min_samples_leaf": 10
     },
     "XGBoost": {

@@ -158,7 +158,7 @@ def make_pipeline(model_name: str, n_features: int, k: int) -> Pipeline:
             raise ImportError("xgboost no estÃ¡ instalado.")
         clf = XGBClassifier(
             random_state=42, n_jobs=1, eval_metric="logloss",
-            scale_pos_weight=9.32, tree_method="hist",
+            scale_pos_weight=9.32, tree_method="gpu_hist", device="cuda",
         )
     else:
         raise ValueError(f"Modelo desconocido: {model_name}")

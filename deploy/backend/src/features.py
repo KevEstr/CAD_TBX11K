@@ -1,40 +1,50 @@
 """
 cad_tbx11k.features
 ====================
-Módulo de extracción de características del pipeline CAD-TBX11K.
+Extracción de características del pipeline CAD-TBX11K.
 
-Convierte cada radiografía preprocesada en un vector numérico de 1828 características
-agrupadas en cinco grupos:
+El diseño separa explícitamente **tejido pulmonar**, **forma de la máscara** y
+**contexto/fuente**, para que el análisis pueda demostrar qué parte del
+rendimiento se debe a cada uno:
 
-+----------------------+-------------------------------------------+----------+
-| Grupo                | Qué captura                               | Features |
-+======================+===========================================+==========+
-| Intensidad global    | brillo, variabilidad, rango dinámico,     |        4 |
-|                      | desorden del histograma                   |          |
-+----------------------+-------------------------------------------+----------+
-| Intensidad regional  | las mismas 4 métricas en 6 zonas          |       24 |
-|                      | anatómicas (SI, SD, MI, MD, II, ID)       |          |
-+----------------------+-------------------------------------------+----------+
-| GLCM                 | relación entre píxeles vecinos —          |       10 |
-|                      | textura del tejido pulmonar               |          |
-+----------------------+-------------------------------------------+----------+
-| LBP                  | micro-patrones locales —                  |       26 |
-|                      | bordes finos y transiciones               |          |
-+----------------------+-------------------------------------------+----------+
-| HOG                  | gradientes orientados —                   |     1764 |
-|                      | forma y estructura                        |          |
-+----------------------+-------------------------------------------+----------+
-| **Total**            |                                           | **1828** |
-+----------------------+-------------------------------------------+----------+
++----------------------+--------------------------------------------------+
+| Grupo                | Qué captura                                      |
++======================+==================================================+
+| ``texture``          | intensidad, GLCM, LBP y Gabor calculados dentro  |
+|                      | del campo pulmonar (96 features)                 |
++----------------------+--------------------------------------------------+
+| ``hog``              | gradientes orientados sobre el recorte torácico  |
+|                      | (1764 features, mapeables a posición espacial)   |
++----------------------+--------------------------------------------------+
+| ``shape``            | geometría de la máscara (10) + miniatura 8×8     |
+|                      | de la máscara (64) — **solo control de sesgo**   |
++----------------------+--------------------------------------------------+
+| ``context``          | intensidad/textura del fondo + miniatura 16×16   |
+|                      | del fondo (352) — **control de fuente**          |
++----------------------+--------------------------------------------------+
+| ``quality``          | métricas de la segmentación (área, balance,      |
+|                      | contraste, fallback)                             |
++----------------------+--------------------------------------------------+
 
-Documentación de referencia
----------------------------
-- scipy.stats.entropy : https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.entropy.html
-- skimage GLCM        : https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.graycomatrix
-- skimage LBP         : https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.local_binary_pattern
-- skimage HOG         : https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.hog
-- OpenCV calcHist     : https://docs.opencv.org/4.x/d6/dc7/group__imgproc__hist.html
+Las características de textura se calculan con **soporte de máscara**: la
+intensidad, GLCM, LBP y Gabor solo usan píxeles pulmonares. El exterior se
+rellena con la mediana pulmonar (no con 0) para no crear bordes artificiales.
+HOG se calcula sobre el recorte torácico completo, sin máscara, para que no
+codifique el contorno de la máscara.
+
+El contraste de intensidad usa ``p95 - p5`` en lugar de ``max - min`` para no
+depender de píxeles saturados por CLAHE (el antiguo ``ID_contrast`` ≈ 245 era
+un artefacto de saturación).
+
+Referencias
+-----------
+- Haralick et al. (1973). Textural features for image classification.
+- Ojala et al. (2002). Multiresolution gray-scale and rotation invariant LBP.
+- Dalal & Triggs (2005). Histograms of oriented gradients for human detection.
+- Bosch et al. (2007). Representing shape with a spatial pyramid kernel.
 """
+
+from __future__ import annotations
 
 from typing import Optional
 
@@ -46,314 +56,224 @@ from skimage.feature import graycomatrix, graycoprops, hog, local_binary_pattern
 from skimage.filters import gabor as skimage_gabor
 from tqdm import tqdm
 
-from .preprocessing import preprocess
+from .preprocessing import IMG_SIZE, preprocess_bundle
 
 # ---------------------------------------------------------------------------
-# Definición de regiones anatómicas
+# Regiones anatómicas (6 zonas sobre la imagen de 256×256)
 # ---------------------------------------------------------------------------
 
 REGIONS: dict[str, tuple[int, int, int, int]] = {
-    "SI": (0,   0,   128, 86),
-    "SD": (128, 0,   128, 86),
-    "MI": (0,   86,  128, 85),
-    "MD": (128, 86,  128, 85),
-    "II": (0,   171, 128, 85),
+    "SI": (0, 0, 128, 86),
+    "SD": (128, 0, 128, 86),
+    "MI": (0, 86, 128, 85),
+    "MD": (128, 86, 128, 85),
+    "II": (0, 171, 128, 85),
     "ID": (128, 171, 128, 85),
 }
-"""
-División en seis regiones anatómicas sobre la imagen 256×256.
-
-Cada entrada es ``(x, y, ancho, alto)`` en píxeles.
-
-Distribución::
-
-    ┌─────────────┬─────────────┐
-    │  SI         │  SD         │  ← zona superior
-    ├─────────────┼─────────────┤
-    │  MI         │  MD         │  ← zona media
-    ├─────────────┼─────────────┤
-    │  II         │  ID         │  ← zona inferior
-    └─────────────┴─────────────┘
-         col 0–127    col 128–255
-
-El análisis en ``04_Analisis_Regional.ipynb`` justifica esta segmentación
-mostrando que las regiones superiores (SI, SD) presentan diferencias de
-intensidad estadísticamente relevantes entre las clases ``health`` y ``tb``.
-"""
 
 # ---------------------------------------------------------------------------
-# Parámetros de los extractores
+# Parámetros
 # ---------------------------------------------------------------------------
 
-GLCM_PROPS: list[str] = ["contrast", "correlation", "energy", "homogeneity", "dissimilarity"]
-"""Propiedades GLCM calculadas por cada combinación ángulo/distancia."""
+GLCM_PROPS = ["contrast", "correlation", "energy", "homogeneity", "dissimilarity"]
+GLCM_ANGLES = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
 
-GLCM_ANGLES: list[float] = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
-"""Cuatro ángulos para invarianza a la orientación (0°, 45°, 90°, 135°)."""
+LBP_P = 24
+LBP_R = 3.0
+LBP_BINS = LBP_P + 2
 
-LBP_P: int = 24
-"""Número de puntos de muestreo en el círculo LBP."""
+HOG_ORIENTATIONS = 9
+HOG_PIXELS_PER_CELL = (32, 32)
+HOG_CELLS_PER_BLOCK = (2, 2)
 
-LBP_R: float = 3.0
-"""Radio del círculo de muestreo LBP en píxeles."""
+GABOR_FREQUENCIES = [0.1, 0.2, 0.3, 0.4]
+GABOR_THETAS = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
 
-LBP_BINS: int = LBP_P + 2
-"""Número de bins del histograma LBP (``P + 2`` para el método ``uniform``)."""
+PHOG_ORIENTATIONS = 8
+PHOG_CELLS_PER_BLOCK = (2, 2)
+PHOG_L0_PPC = (64, 64)
+PHOG_L1_PPC = (32, 32)
 
-HOG_ORIENTATIONS: int = 9
-"""Número de orientaciones del gradiente para HOG."""
+CONTEXT_THUMB = (16, 16)
+SHAPE_THUMB = (8, 8)
 
-HOG_PIXELS_PER_CELL: tuple[int, int] = (32, 32)
-"""Tamaño de cada celda HOG en píxeles.
-
-Se usan celdas de 32×32 (en lugar del estándar 16×16) para obtener
-1764 features en lugar de ~8100, manteniendo un balance adecuado
-entre detalle y dimensionalidad dado el tamaño del dataset (8400 muestras)."""
-
-HOG_CELLS_PER_BLOCK: tuple[int, int] = (2, 2)
-"""Número de celdas por bloque para la normalización HOG."""
-
-# Gabor
-GABOR_FREQUENCIES: list[float] = [0.1, 0.2, 0.3, 0.4]
-"""Frecuencias de los filtros Gabor en ciclos/píxel.
-
-Cubren desde estructuras gruesas (~10 px, p. ej. cavidades)
-hasta estructuras finas (~2.5 px, p. ej. bordes de infiltrados)."""
-
-GABOR_THETAS: list[float] = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
-"""Orientaciones de los filtros Gabor (0°, 45°, 90°, 135°).
-
-Las mismas cuatro orientaciones que se usan en GLCM,
-lo que facilita la comparación directa entre ambos descriptores."""
-
-# PHOG
-PHOG_ORIENTATIONS: int = 8
-"""Número de orientaciones del gradiente para PHOG."""
-
-PHOG_CELLS_PER_BLOCK: tuple[int, int] = (2, 2)
-"""Celdas por bloque para normalización en PHOG."""
-
-PHOG_L0_PPC: tuple[int, int] = (64, 64)
-"""pixels_per_cell en nivel 0 de PHOG (imagen 256×256 completa).
-
-Con ppc=64: 4×4 celdas → 3×3 bloques → 3×3×2×2×8 = 288 features."""
-
-PHOG_L1_PPC: tuple[int, int] = (32, 32)
-"""pixels_per_cell en nivel 1 de PHOG (cuadrantes 128×128).
-
-Con ppc=32 sobre 128×128: 4×4 celdas → 3×3 bloques → 3×3×2×2×8 = 288 features.
-4 cuadrantes × 288 = 1152 features."""
+META_COLS = {"image_path", "class_name", "label"}
 
 
 # ---------------------------------------------------------------------------
-# Extractor 1: Intensidad global
+# Utilidades de máscara
 # ---------------------------------------------------------------------------
 
-def feat_intensity_global(img: np.ndarray) -> dict:
+def _safe_mask(mask: Optional[np.ndarray], shape: tuple[int, int]) -> np.ndarray:
+    if mask is None:
+        return np.ones(shape, dtype=bool)
+    return mask.astype(bool)
+
+
+def _erode(mask: np.ndarray, radius: int = 3) -> np.ndarray:
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
+    )
+    eroded = cv2.erode(mask.astype(np.uint8), kernel).astype(bool)
+    return eroded if eroded.any() else mask
+
+
+def _filled(img: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Rellena el exterior de la máscara con la mediana interior (no con 0)."""
+    if mask.all() or not mask.any():
+        return img
+    med = int(np.median(img[mask]))
+    return np.where(mask, img, med).astype(np.uint8)
+
+
+def _values(img: np.ndarray, mask: Optional[np.ndarray]) -> np.ndarray:
+    m = _safe_mask(mask, img.shape)
+    vals = img[m]
+    return vals if vals.size else img.ravel()
+
+
+def _robust_contrast(vals: np.ndarray) -> float:
+    if vals.size < 2:
+        return 0.0
+    return float(np.percentile(vals, 95) - np.percentile(vals, 5))
+
+
+def _entropy_from_values(vals: np.ndarray, bins: int = 256) -> float:
+    h, _ = np.histogram(vals, bins=bins, range=(0, 256), density=False)
+    h = h.astype(float) / (h.sum() + 1e-9)
+    return float(scipy_entropy(h + 1e-9))
+
+
+# ---------------------------------------------------------------------------
+# Intensidad
+# ---------------------------------------------------------------------------
+
+def feat_intensity_global(img: np.ndarray, mask: Optional[np.ndarray] = None) -> dict:
+    """Media, desviación, contraste robusto (p95-p5) y entropía.
+
+    Si ``mask`` se proporciona, todas las métricas se calculan solo dentro de
+    la máscara.
     """
-    Calcula cuatro métricas de intensidad sobre la imagen completa.
-
-    - **mean**     : brillo promedio global.
-    - **std**      : variabilidad de brillo — tejidos más heterogéneos
-                     (p. ej. infiltrados) producen mayor desviación.
-    - **contrast** : diferencia entre el píxel más brillante y el más oscuro.
-    - **entropy**  : desorden del histograma de intensidad — lesiones TB
-                     aumentan la heterogeneidad y, con ello, la entropía.
-
-    Parámetros
-    ----------
-    img : np.ndarray
-        Imagen en escala de grises preprocesada (uint8).
-
-    Retorna
-    -------
-    dict
-        Cuatro entradas: ``mean``, ``std``, ``contrast``, ``entropy``.
-
-    Referencias
-    -----------
-    - scipy.stats.entropy: https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.entropy.html
-    - cv2.calcHist: https://docs.opencv.org/4.x/d6/dc7/group__imgproc__hist.html
-    """
-    h = cv2.calcHist([img], [0], None, [256], [0, 256]).flatten()
-    h_norm = h / (h.sum() + 1e-9)
+    vals = _values(img, mask)
     return {
-        "mean":     float(np.mean(img)),
-        "std":      float(np.std(img)),
-        # int() explícito para evitar overflow en la resta de uint8
-        "contrast": float(int(img.max()) - int(img.min())),
-        "entropy":  float(scipy_entropy(h_norm + 1e-9)),
+        "mean": float(np.mean(vals)),
+        "std": float(np.std(vals)),
+        "contrast": _robust_contrast(vals),
+        "entropy": _entropy_from_values(vals),
     }
 
 
-# ---------------------------------------------------------------------------
-# Extractor 2: Intensidad regional
-# ---------------------------------------------------------------------------
+def feat_intensity_regional(img: np.ndarray, mask: Optional[np.ndarray] = None) -> dict:
+    """Las mismas métricas en las seis regiones anatómicas.
 
-def feat_intensity_regional(img: np.ndarray) -> dict:
-    """
-    Calcula las mismas cuatro métricas de :func:`feat_intensity_global`
-    en cada una de las seis regiones anatómicas definidas en :data:`REGIONS`.
-
-    El análisis regional captura la distribución espacial de la intensidad,
-    que se diluye cuando se calculan métricas únicamente a nivel global.
-    En TB, las regiones superiores (SI, SD) suelen presentar mayor intensidad
-    y heterogeneidad que en imágenes sanas.
-
-    Parámetros
-    ----------
-    img : np.ndarray
-        Imagen en escala de grises preprocesada (uint8, shape 256×256).
-
-    Retorna
-    -------
-    dict
-        24 entradas con el patrón ``{REGION}_{metrica}``
-        (p. ej. ``SI_mean``, ``SD_entropy``).
+    Cada región se intersecta con la máscara pulmonar. Si la intersección tiene
+    menos de 20 píxeles, la región se resume con los píxeles disponibles; si
+    está vacía, se devuelve 0.
     """
     feats: dict = {}
     for name, (x, y, w, h) in REGIONS.items():
         roi = img[y:y + h, x:x + w]
-        hr = cv2.calcHist([roi], [0], None, [256], [0, 256]).flatten()
-        hr_norm = hr / (hr.sum() + 1e-9)
-        feats[f"{name}_mean"]     = float(np.mean(roi))
-        feats[f"{name}_std"]      = float(np.std(roi))
-        feats[f"{name}_contrast"] = float(int(roi.max()) - int(roi.min()))
-        feats[f"{name}_entropy"]  = float(scipy_entropy(hr_norm + 1e-9))
+        if mask is not None:
+            roi_mask = mask[y:y + h, x:x + w]
+            vals = roi[roi_mask] if roi_mask.any() else np.array([], dtype=roi.dtype)
+        else:
+            vals = roi.ravel()
+        if vals.size == 0:
+            feats[f"{name}_mean"] = 0.0
+            feats[f"{name}_std"] = 0.0
+            feats[f"{name}_contrast"] = 0.0
+            feats[f"{name}_entropy"] = 0.0
+            continue
+        feats[f"{name}_mean"] = float(np.mean(vals))
+        feats[f"{name}_std"] = float(np.std(vals))
+        feats[f"{name}_contrast"] = _robust_contrast(vals)
+        feats[f"{name}_entropy"] = _entropy_from_values(vals)
     return feats
 
 
 # ---------------------------------------------------------------------------
-# Extractor 3: GLCM
+# GLCM / LBP / Gabor
 # ---------------------------------------------------------------------------
 
-def feat_glcm(img: np.ndarray) -> dict:
+def feat_glcm(img: np.ndarray, mask: Optional[np.ndarray] = None) -> dict:
+    """GLCM (64 niveles, 4 ángulos) con soporte de máscara.
+
+    El exterior de la máscara se rellena con la mediana pulmonar y el cálculo
+    se restringe a la caja de la máscara para no incluir fondo.
     """
-    Calcula la matriz de co-ocurrencia de niveles de gris (GLCM) y extrae
-    cinco propiedades de textura, cada una resumida como media y desviación
-    estándar sobre los cuatro ángulos.
-
-    **Propiedades:**
-    - ``contrast``       : variación local de intensidad entre pares de píxeles.
-    - ``correlation``    : dependencia lineal entre píxeles vecinos.
-    - ``energy``         : uniformidad — imágenes homogéneas tienen mayor energía.
-    - ``homogeneity``    : cercanía de los elementos de la GLCM a la diagonal.
-    - ``dissimilarity``  : similar al contraste pero con peso lineal.
-
-    Se usan 64 niveles de gris (``img // 4``) por eficiencia y robustez al ruido;
-    con 256 niveles la GLCM sería dispersa y el cálculo costoso.
-
-    La media sobre los cuatro ángulos produce un descriptor invariante a la
-    orientación de las estructuras anatómicas.  La desviación estándar sobre
-    ángulos captura la anisotropía de la textura.
-
-    Parámetros
-    ----------
-    img : np.ndarray
-        Imagen en escala de grises preprocesada (uint8, shape 256×256).
-
-    Retorna
-    -------
-    dict
-        10 entradas con el patrón ``glcm_{propiedad}_{mean|std}``.
-
-    Referencias
-    -----------
-    - graycomatrix: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.graycomatrix
-    - graycoprops: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.graycoprops
-    - Haralick et al. (1973): "Textural features for image classification."
-    """
-    img64 = (img // 4).astype(np.uint8)
+    m = _safe_mask(mask, img.shape)
+    work = _filled(img, m)
+    if m.any():
+        ys, xs = np.where(m)
+        y0, y1 = max(0, ys.min() - 2), min(img.shape[0], ys.max() + 3)
+        x0, x1 = max(0, xs.min() - 2), min(img.shape[1], xs.max() + 3)
+        work = work[y0:y1, x0:x1]
+    img64 = (work // 4).astype(np.uint8)
     glcm = graycomatrix(
-        img64,
-        distances=[1],
-        angles=GLCM_ANGLES,
-        levels=64,
-        symmetric=True,
-        normed=True,
+        img64, distances=[1], angles=GLCM_ANGLES, levels=64,
+        symmetric=True, normed=True,
     )
     feats: dict = {}
     for prop in GLCM_PROPS:
         vals = graycoprops(glcm, prop).flatten()
         feats[f"glcm_{prop}_mean"] = float(np.mean(vals))
-        feats[f"glcm_{prop}_std"]  = float(np.std(vals))
+        feats[f"glcm_{prop}_std"] = float(np.std(vals))
+    return feats
+
+
+def feat_lbp(img: np.ndarray, mask: Optional[np.ndarray] = None) -> dict:
+    """Histograma LBP uniforme calculado solo sobre píxeles de la máscara.
+
+    Se erosiona la máscara para evitar respuestas de borde en el contorno.
+    """
+    m = _safe_mask(mask, img.shape)
+    work = _filled(img, m)
+    lbp_img = local_binary_pattern(work, P=LBP_P, R=LBP_R, method="uniform")
+    inner = _erode(m, radius=3)
+    vals = lbp_img[inner] if inner.any() else lbp_img.ravel()
+    hist, _ = np.histogram(vals, bins=LBP_BINS, range=(0, LBP_BINS), density=True)
+    return {f"lbp_{i}": float(v) for i, v in enumerate(hist)}
+
+
+def feat_gabor(img: np.ndarray, mask: Optional[np.ndarray] = None) -> dict:
+    """Banco Gabor 4×4; media y desviación de la magnitud dentro de la máscara.
+
+    Se implementa con ``cv2.getGaborKernel`` + ``cv2.filter2D`` (float32), que
+    es ~10× más rápido que el filtrado FFT de scikit-image para 16 filtros.
+    """
+    m = _safe_mask(mask, img.shape)
+    work = _filled(img, m).astype(np.float32)
+    inner = _erode(m, radius=4)
+    feats: dict = {}
+    for freq in GABOR_FREQUENCIES:
+        sigma = 0.56 / max(freq, 1e-6)
+        ksize = int(2 * round(3 * sigma) + 1)
+        ksize = min(max(ksize, 9), 127)
+        for theta in GABOR_THETAS:
+            kernel = cv2.getGaborKernel(
+                (ksize, ksize), sigma, theta, 1.0 / freq, 0.5, ktype=cv2.CV_32F
+            )
+            real = cv2.filter2D(work, cv2.CV_32F, kernel, borderType=cv2.BORDER_REFLECT)
+            # Respuesta real + respuesta en cuadratura (Hilbert aproximado).
+            kernel_q = cv2.getGaborKernel(
+                (ksize, ksize), sigma, theta, 1.0 / freq, 0.5,
+                ktype=cv2.CV_32F, psi=np.pi / 2,
+            )
+            imag = cv2.filter2D(work, cv2.CV_32F, kernel_q, borderType=cv2.BORDER_REFLECT)
+            mag = cv2.magnitude(real, imag)
+            vals = mag[inner] if inner.any() else mag.ravel()
+            label = f"gabor_f{freq:.1f}_t{int(np.degrees(theta))}"
+            feats[f"{label}_mean"] = float(np.mean(vals))
+            feats[f"{label}_std"] = float(np.std(vals))
     return feats
 
 
 # ---------------------------------------------------------------------------
-# Extractor 4: LBP
-# ---------------------------------------------------------------------------
-
-def feat_lbp(img: np.ndarray) -> dict:
-    """
-    Calcula el histograma de Local Binary Patterns (LBP) con el método
-    ``uniform``.
-
-    LBP compara cada píxel con sus vecinos equidistantes en un círculo de
-    radio :data:`LBP_R` y codifica las comparaciones como un número binario.
-    El método ``uniform`` retiene solo los patrones con ≤ 2 transiciones
-    0→1, que corresponden a estructuras locales significativas (bordes,
-    esquinas, puntos).  Los patrones ruidosos se agrupan en un solo bin.
-
-    Con :data:`LBP_P` = 24 vecinos a radio 3 se obtienen 26 bins (P + 2).
-    El histograma se normaliza (``density=True``) para ser independiente
-    del tamaño de la imagen.
-
-    Parámetros
-    ----------
-    img : np.ndarray
-        Imagen en escala de grises preprocesada (uint8, shape 256×256).
-
-    Retorna
-    -------
-    dict
-        26 entradas con el patrón ``lbp_{i}`` (i ∈ 0..25).
-
-    Referencias
-    -----------
-    - local_binary_pattern: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.local_binary_pattern
-    - Ojala et al. (2002): "Multiresolution gray-scale and rotation invariant
-      texture classification with local binary patterns."
-    """
-    lbp_img = local_binary_pattern(img, P=LBP_P, R=LBP_R, method="uniform")
-    hist, _ = np.histogram(lbp_img.ravel(), bins=LBP_BINS, range=(0, LBP_BINS), density=True)
-    return {f"lbp_{i}": float(v) for i, v in enumerate(hist)}
-
-
-# ---------------------------------------------------------------------------
-# Extractor 5: HOG
+# HOG / PHOG
 # ---------------------------------------------------------------------------
 
 def feat_hog(img: np.ndarray) -> dict:
-    """
-    Calcula el descriptor HOG (*Histogram of Oriented Gradients*).
-
-    HOG divide la imagen en celdas de :data:`HOG_PIXELS_PER_CELL` píxeles,
-    computa un histograma de orientaciones de gradiente en cada celda y
-    normaliza en bloques de :data:`HOG_CELLS_PER_BLOCK` celdas con L2-Hys
-    para robustez ante cambios de iluminación y contraste.
-
-    Se usa ``pixels_per_cell=(32, 32)`` en lugar del estándar ``(16, 16)``
-    para controlar la dimensionalidad:
-
-    - Con 16×16: ~8100 features (problemático con ~8400 muestras disponibles).
-    - Con 32×32: 1764 features (dimensionalidad manejable sin perder detalle estructural relevante).
-
-    Parámetros
-    ----------
-    img : np.ndarray
-        Imagen en escala de grises preprocesada (uint8, shape 256×256).
-
-    Retorna
-    -------
-    dict
-        1764 entradas con el patrón ``hog_{i}``.
-
-    Referencias
-    -----------
-    - skimage HOG: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.hog
-    - Dalal & Triggs (2005): "Histograms of oriented gradients for human detection."
-    """
+    """HOG 1764 features sobre el recorte torácico completo (sin máscara)."""
     fd = hog(
         img,
         orientations=HOG_ORIENTATIONS,
@@ -365,64 +285,7 @@ def feat_hog(img: np.ndarray) -> dict:
     return {f"hog_{i}": float(v) for i, v in enumerate(fd)}
 
 
-# ---------------------------------------------------------------------------
-# Extractor 6: Gabor
-# ---------------------------------------------------------------------------
-
-def feat_gabor(img: np.ndarray) -> dict:
-    """
-    Aplica un banco de filtros Gabor y resume cada respuesta con media y
-    desviación estándar de la magnitud.
-
-    Un filtro Gabor combina una sinusoide de frecuencia ``f`` orientada a
-    ``θ`` con una envolvente gaussiana.  La magnitud de la respuesta
-    ``sqrt(real² + imag²)`` mide cuánta energía tiene la imagen en esa
-    frecuencia y orientación local.
-
-    **Banco utilizado:**
-
-    - 4 frecuencias: 0.1, 0.2, 0.3, 0.4 ciclos/píxel
-      (estructuras de ~10 px hasta ~2.5 px).
-    - 4 orientaciones: 0°, 45°, 90°, 135°
-      (mismas que GLCM para comparación directa).
-
-    Por cada uno de los 4×4 = 16 filtros se calculan mean y std →
-    **32 features en total**.
-
-    Parámetros
-    ----------
-    img : np.ndarray
-        Imagen en escala de grises preprocesada (uint8, shape 256×256).
-
-    Retorna
-    -------
-    dict
-        32 entradas con el patrón ``gabor_f{freq}_t{grados}_{mean|std}``.
-
-    Referencias
-    -----------
-    - skimage gabor: https://scikit-image.org/docs/stable/api/skimage.filters.html#skimage.filters.gabor
-    - Chauhan et al.: "Role of Gist and PHOG features in computer-aided
-      diagnosis of tuberculosis without segmentation."
-    """
-    img_float = img.astype(float)
-    feats: dict = {}
-    for freq in GABOR_FREQUENCIES:
-        for theta in GABOR_THETAS:
-            real, imag = skimage_gabor(img_float, frequency=freq, theta=theta)
-            magnitude  = np.sqrt(real ** 2 + imag ** 2)
-            label = f"gabor_f{freq:.1f}_t{int(np.degrees(theta))}"
-            feats[f"{label}_mean"] = float(np.mean(magnitude))
-            feats[f"{label}_std"]  = float(np.std(magnitude))
-    return feats
-
-
-# ---------------------------------------------------------------------------
-# Extractor 7: PHOG
-# ---------------------------------------------------------------------------
-
 def _hog_region(region: np.ndarray, ppc: tuple[int, int]) -> np.ndarray:
-    """Calcula HOG sobre una región con los parámetros de PHOG."""
     return hog(
         region,
         orientations=PHOG_ORIENTATIONS,
@@ -434,64 +297,12 @@ def _hog_region(region: np.ndarray, ppc: tuple[int, int]) -> np.ndarray:
 
 
 def feat_phog(img: np.ndarray) -> dict:
-    """
-    Calcula el descriptor Pyramid HOG (PHOG) en dos niveles de resolución
-    espacial.
-
-    PHOG extiende HOG añadiendo información sobre *dónde* aparecen las
-    orientaciones de gradiente en la imagen.  Esto es relevante en
-    radiografías de tórax porque la distribución espacial de las lesiones
-    (p. ej. predominio en lóbulos superiores en TB activa) aporta
-    información diagnóstica que un HOG global no captura.
-
-    **Pirámide utilizada** (sobre imagen 256×256):
-
-    .. code-block:: text
-
-        Nivel 0 — imagen completa (256×256), ppc = (64, 64)
-        ┌─────────────────────────────────────┐
-        │  HOG global → 288 features          │
-        └─────────────────────────────────────┘
-
-        Nivel 1 — 4 cuadrantes (128×128 c/u), ppc = (32, 32)
-        ┌──────────────────┬──────────────────┐
-        │  HOG → 288       │  HOG → 288       │
-        ├──────────────────┼──────────────────┤
-        │  HOG → 288       │  HOG → 288       │
-        └──────────────────┴──────────────────┘
-        4 × 288 = 1152 features
-
-    **Total: 288 + 1152 = 1440 features.**
-
-    El nivel 2 (16 cuadrantes de 64×64) no es viable porque HOG requiere
-    al menos 128×128 con los parámetros elegidos.
-
-    Parámetros
-    ----------
-    img : np.ndarray
-        Imagen en escala de grises preprocesada (uint8, shape 256×256).
-
-    Retorna
-    -------
-    dict
-        1440 entradas con el patrón ``phog_l{nivel}_{i}``.
-
-    Referencias
-    -----------
-    - Chauhan et al.: "Role of Gist and PHOG features in computer-aided
-      diagnosis of tuberculosis without segmentation."
-    - Anna Bosch et al. (2007): "Representing shape with a spatial pyramid
-      kernel."
-    """
+    """PHOG en dos niveles (1440 features). Se conserva para comparación."""
     h, w = img.shape
     feats: dict = {}
-
-    # Nivel 0 — imagen completa
     l0 = _hog_region(img, PHOG_L0_PPC)
     for i, v in enumerate(l0):
         feats[f"phog_l0_{i}"] = float(v)
-
-    # Nivel 1 — 4 cuadrantes de 128×128
     idx = 0
     for row in range(2):
         for col in range(2):
@@ -501,90 +312,185 @@ def feat_phog(img: np.ndarray) -> dict:
             for v in l1:
                 feats[f"phog_l1_{idx}"] = float(v)
                 idx += 1
-
     return feats
 
 
 # ---------------------------------------------------------------------------
-# Función principal de extracción por imagen
+# Forma de la máscara (control de sesgo)
 # ---------------------------------------------------------------------------
 
-def extract_features(image_path: str, label: int, class_name: str) -> Optional[dict]:
-    """
-    Ejecuta el pipeline completo de preprocesamiento y extracción de
-    características para una sola imagen.
+def feat_shape(mask: np.ndarray) -> dict:
+    """Geometría de la máscara pulmonar, para el baseline de forma."""
+    m = mask.astype(np.uint8)
+    h, w = m.shape
+    area = float(m.sum())
+    ys, xs = np.where(m)
+    if area == 0 or len(xs) == 0:
+        base = {k: 0.0 for k in [
+            "area_fraction", "bbox_w", "bbox_h", "aspect", "extent",
+            "solidity", "perimeter_norm", "lr_balance", "centroid_x", "centroid_y",
+        ]}
+        base.update({f"shape_thumb_{i}": 0.0 for i in range(SHAPE_THUMB[0] * SHAPE_THUMB[1])})
+        return base
 
-    Parámetros
-    ----------
-    image_path : str
-        Ruta al archivo de imagen original.
-    label : int
-        Etiqueta numérica de la clase.
-    class_name : str
-        Nombre de la clase (``'health'``, ``'sick'`` o ``'tb'``).
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    bw, bh = max(x1 - x0, 1), max(y1 - y0, 1)
+    contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    perim = float(sum(cv2.arcLength(c, True) for c in contours))
+    hull_area = float(sum(cv2.contourArea(cv2.convexHull(c)) for c in contours)) or 1.0
+    left = float(m[:, : w // 2].sum())
+    right = float(m[:, w // 2:].sum())
 
-    Retorna
-    -------
-    dict o None
-        Diccionario con los metadatos de la imagen y las 1828 características,
-        o ``None`` si la imagen no puede cargarse o procesarse.
+    feats = {
+        "area_fraction": area / (h * w),
+        "bbox_w": bw / w,
+        "bbox_h": bh / h,
+        "aspect": bw / bh,
+        "extent": area / (bw * bh),
+        "solidity": min(area / hull_area, 1.0),
+        "perimeter_norm": perim / (2 * (h + w)),
+        "lr_balance": min(left, right) / max(max(left, right), 1.0),
+        "centroid_x": float(xs.mean()) / w,
+        "centroid_y": float(ys.mean()) / h,
+    }
+    thumb = cv2.resize(m * 255, SHAPE_THUMB, interpolation=cv2.INTER_AREA).astype(float) / 255.0
+    feats.update({f"shape_thumb_{i}": float(v) for i, v in enumerate(thumb.ravel())})
+    return feats
+
+
+# ---------------------------------------------------------------------------
+# Contexto / fuente (control de sesgo)
+# ---------------------------------------------------------------------------
+
+def feat_context(img: np.ndarray, context_mask: np.ndarray) -> dict:
+    """Características del fondo: intensidad/textura + miniatura 16×16.
+
+    La miniatura captura la firma de adquisición (esquinas, colimación,
+    marcadores) que en TBX11K puede separar las clases sin ver el pulmón.
     """
-    img = preprocess(image_path)
-    if img is None:
+    m = context_mask.astype(bool)
+    feats: dict = {}
+    for k, v in feat_intensity_global(img, m).items():
+        feats[f"ctx_{k}"] = v
+    for k, v in feat_intensity_regional(img, m).items():
+        feats[f"ctx_{k}"] = v
+    for k, v in feat_glcm(img, m).items():
+        feats[f"ctx_{k}"] = v
+    for k, v in feat_lbp(img, m).items():
+        feats[f"ctx_{k}"] = v
+    for k, v in feat_gabor(img, m).items():
+        feats[f"ctx_{k}"] = v
+
+    # Miniatura del fondo: se anula el campo torácico para no mezclar pulmón.
+    bg = img.copy()
+    bg[~m] = 0
+    thumb = cv2.resize(bg, CONTEXT_THUMB, interpolation=cv2.INTER_AREA)
+    feats.update({
+        f"ctx_thumb_{i}": float(v) for i, v in enumerate(thumb.ravel())
+    })
+    return feats
+
+
+# ---------------------------------------------------------------------------
+# Extracción por imagen
+# ---------------------------------------------------------------------------
+
+def extract_features(
+    image_path: str,
+    label: int,
+    class_name: str,
+    include_hog: bool = True,
+    include_phog: bool = False,
+    include_context: bool = True,
+    include_shape: bool = True,
+    bundle: Optional[dict] = None,
+) -> Optional[dict]:
+    """Extrae todas las familias de características para una imagen.
+
+    La vista principal es el recorte torácico; la textura usa la máscara
+    pulmonar como soporte. El contexto se extrae de la imagen completa con la
+    máscara de fondo.
+    """
+    if bundle is None:
+        bundle = preprocess_bundle(image_path)
+    if bundle is None:
         return None
 
+    img, mask = bundle["thorax"]
+    quality = bundle["quality"]
+
     row: dict = {"image_path": image_path, "class_name": class_name, "label": label}
-    row.update(feat_intensity_global(img))
-    row.update(feat_intensity_regional(img))
-    row.update(feat_glcm(img))
-    row.update(feat_lbp(img))
-    row.update(feat_hog(img))
-    row.update(feat_gabor(img))
-    row.update(feat_phog(img))
+    row.update(feat_intensity_global(img, mask))
+    row.update(feat_intensity_regional(img, mask))
+    row.update(feat_glcm(img, mask))
+    row.update(feat_lbp(img, mask))
+    row.update(feat_gabor(img, mask))
+    if include_hog:
+        row.update(feat_hog(img))
+    if include_phog:
+        row.update(feat_phog(img))
+    if include_shape:
+        row.update(feat_shape(mask))
+
+    row.update({
+        "mask_area_fraction": float(quality.area_fraction),
+        "mask_lr_balance": float(quality.lr_balance),
+        "mask_contrast": float(quality.contrast),
+        "mask_fallback": int(quality.fallback),
+    })
+
+    if include_context:
+        ctx_img, ctx_mask = bundle["context"]
+        row.update(feat_context(ctx_img, ctx_mask))
     return row
 
 
-# ---------------------------------------------------------------------------
-# Extracción masiva sobre el DataFrame base
-# ---------------------------------------------------------------------------
+def extract_strict_features(image_path: str, label: int, class_name: str,
+                            include_shape: bool = True) -> Optional[dict]:
+    """Extrae textura sobre las vistas ``strict`` y ``strict_harmonized``.
+
+    Se usa para comprobar si la señal de textura sobrevive al eliminar la
+    pared torácica, los hombros, el abdomen y las esquinas. Las columnas se
+    prefijan con ``strict_`` y ``stricth_`` para no colisionar con la matriz
+    principal.
+    """
+    bundle = preprocess_bundle(image_path)
+    if bundle is None:
+        return None
+
+    row: dict = {"image_path": image_path, "class_name": class_name, "label": label}
+    for mode, prefix in [("strict", "strict_"), ("strict_harmonized", "stricth_")]:
+        img, mask = bundle[mode]
+        for k, v in feat_intensity_global(img, mask).items():
+            row[f"{prefix}{k}"] = v
+        for k, v in feat_intensity_regional(img, mask).items():
+            row[f"{prefix}{k}"] = v
+        for k, v in feat_glcm(img, mask).items():
+            row[f"{prefix}{k}"] = v
+        for k, v in feat_lbp(img, mask).items():
+            row[f"{prefix}{k}"] = v
+        for k, v in feat_gabor(img, mask).items():
+            row[f"{prefix}{k}"] = v
+        if include_shape:
+            for k, v in feat_shape(mask).items():
+                row[f"{prefix}{k}"] = v
+    return row
+
+
 def extract_all_features(
     df_base: pd.DataFrame,
     sample: bool = False,
     sample_size: int = 50,
     random_state: int = 42,
+    **kwargs,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """
-    Procesa todas las imágenes del DataFrame base y construye la matriz
-    de características.
-
-    Parámetros
-    ----------
-    df_base : pd.DataFrame
-        DataFrame con columnas ``image_path``, ``label`` y ``class_name``.
-    sample : bool
-        Si es ``True``, procesa solo ``sample_size`` imágenes por clase.
-        Útil para pruebas rápidas durante el desarrollo.
-    sample_size : int
-        Número máximo de imágenes por clase en modo muestra.
-    random_state : int
-        Semilla para reproducibilidad del muestreo.
-
-    Retorna
-    -------
-    features_df : pd.DataFrame
-        DataFrame con una fila por imagen y las 1828 + 3 columnas (metadatos + features).
-    errors : list de str
-        Lista de rutas de imágenes que no pudieron procesarse.
-
-    Referencias
-    -----------
-    - tqdm: https://tqdm.github.io/
-    """
+    """Extrae características para todas las imágenes (o una muestra por clase)."""
     if sample:
         df_proc = pd.concat([
             df_base[df_base["class_name"] == clase].sample(
                 min(sample_size, len(df_base[df_base["class_name"] == clase])),
-                random_state=random_state
+                random_state=random_state,
             )
             for clase in df_base["class_name"].unique()
         ]).reset_index(drop=True)
@@ -595,9 +501,10 @@ def extract_all_features(
 
     rows: list[dict] = []
     errors: list[str] = []
-
     for _, row in tqdm(df_proc.iterrows(), total=len(df_proc), desc="Extrayendo características"):
-        result = extract_features(row["image_path"], row["label"], row["class_name"])
+        result = extract_features(
+            row["image_path"], row["label"], row["class_name"], **kwargs
+        )
         if result is not None:
             rows.append(result)
         else:
@@ -611,122 +518,38 @@ def extract_all_features(
 
 
 # ---------------------------------------------------------------------------
-# Verificación de integridad
-# ---------------------------------------------------------------------------
-
-def verify_extractors(df_base: pd.DataFrame) -> None:
-    """
-    Verifica que cada extractor produce el número correcto de características
-    sobre una imagen de muestra de cada clase.
-
-    Parámetros
-    ----------
-    df_base : pd.DataFrame
-        DataFrame base con al menos una imagen por clase.
-
-    Raises
-    ------
-    AssertionError
-        Si algún extractor no produce la cantidad esperada de características.
-    """
-    from .data import LABEL_MAP
-
-    expected = {
-        "global":   4,
-        "regional": 24,
-        "GLCM":     10,
-        "LBP":      26,
-        "HOG":      1764,
-        "Gabor":    32,
-        "PHOG":     1440,
-        "TOTAL":    3300,
-    }
-
-    for class_name in LABEL_MAP:
-        sample = df_base[df_base["class_name"] == class_name]
-        if sample.empty:
-            continue
-        path = sample.iloc[0]["image_path"]
-        img = preprocess(path)
-        assert img is not None, f"No se pudo preprocesar la imagen de {class_name}."
-        assert img.shape == (256, 256), f"Shape inesperado: {img.shape}."
-
-        g  = feat_intensity_global(img)
-        ri = feat_intensity_regional(img)
-        gl = feat_glcm(img)
-        lb = feat_lbp(img)
-        hg = feat_hog(img)
-        ga = feat_gabor(img)
-        ph = feat_phog(img)
-        total = len(g) + len(ri) + len(gl) + len(lb) + len(hg) + len(ga) + len(ph)
-
-        print(
-            f"{class_name:>6} | global={len(g)}  regional={len(ri)}"
-            f"  GLCM={len(gl)}  LBP={len(lb)}  HOG={len(hg)}"
-            f"  Gabor={len(ga)}  PHOG={len(ph)}  TOTAL={total}"
-        )
-        assert len(g)  == expected["global"],   f"global: esperado {expected['global']}, obtenido {len(g)}"
-        assert len(ri) == expected["regional"],  f"regional: esperado {expected['regional']}, obtenido {len(ri)}"
-        assert len(gl) == expected["GLCM"],      f"GLCM: esperado {expected['GLCM']}, obtenido {len(gl)}"
-        assert len(lb) == expected["LBP"],       f"LBP: esperado {expected['LBP']}, obtenido {len(lb)}"
-        assert len(hg) == expected["HOG"],       f"HOG: esperado {expected['HOG']}, obtenido {len(hg)}"
-        assert len(ga) == expected["Gabor"],     f"Gabor: esperado {expected['Gabor']}, obtenido {len(ga)}"
-        assert len(ph) == expected["PHOG"],      f"PHOG: esperado {expected['PHOG']}, obtenido {len(ph)}"
-        assert total   == expected["TOTAL"],     f"TOTAL: esperado {expected['TOTAL']}, obtenido {total}"
-
-    print(f"\nEsperado: global={expected['global']}  regional={expected['regional']}"
-          f"  GLCM={expected['GLCM']}  LBP={expected['LBP']}"
-          f"  HOG={expected['HOG']}  Gabor={expected['Gabor']}"
-          f"  PHOG={expected['PHOG']}  TOTAL={expected['TOTAL']}")
-    print("Verificación completada sin errores.")
-
-
-# ---------------------------------------------------------------------------
-# Resumen de grupos de características
+# Grupos de características
 # ---------------------------------------------------------------------------
 
 def get_feature_groups(features_df: pd.DataFrame) -> dict[str, list[str]]:
-    """
-    Clasifica las columnas del DataFrame de características en grupos
-    según el extractor que las generó.
+    """Clasifica las columnas en familias para ablaciones y selección."""
+    feat_cols = [c for c in features_df.columns if c not in META_COLS]
 
-    Parámetros
-    ----------
-    features_df : pd.DataFrame
-        DataFrame con la matriz de características.
-
-    Retorna
-    -------
-    dict
-        Diccionario con claves ``'Intensidad global'``, ``'Intensidad regional'``,
-        ``'GLCM'``, ``'LBP'`` y ``'HOG'``, y listas de nombres de columna.
-    """
-    meta_cols = {"image_path", "class_name", "label"}
-    feat_cols = [c for c in features_df.columns if c not in meta_cols]
+    texture = [
+        c for c in feat_cols
+        if c in {"mean", "std", "contrast", "entropy"}
+        or any(c.startswith(r + "_") for r in REGIONS)
+        or c.startswith(("glcm_", "lbp_", "gabor_"))
+    ]
+    hog_cols = [c for c in feat_cols if c.startswith("hog_")]
+    phog_cols = [c for c in feat_cols if c.startswith("phog_")]
+    shape = [c for c in feat_cols if c.startswith("shape_")]
+    context = [c for c in feat_cols if c.startswith("ctx_")]
+    quality = [c for c in feat_cols if c.startswith("mask_")]
 
     return {
-        "Intensidad global":   [c for c in feat_cols if c in {"mean", "std", "contrast", "entropy"}],
-        "Intensidad regional": [c for c in feat_cols if any(c.startswith(r) for r in REGIONS)],
-        "GLCM":                [c for c in feat_cols if c.startswith("glcm_")],
-        "LBP":                 [c for c in feat_cols if c.startswith("lbp_")],
-        "HOG":                 [c for c in feat_cols if c.startswith("hog_")],
-        "Gabor":               [c for c in feat_cols if c.startswith("gabor_")],
-        "PHOG":                [c for c in feat_cols if c.startswith("phog_")],
+        "texture": texture,
+        "hog": hog_cols,
+        "phog": phog_cols,
+        "shape": shape,
+        "context": context,
+        "quality": quality,
     }
 
 
 def print_feature_summary(features_df: pd.DataFrame) -> None:
-    """
-    Imprime un resumen de la distribución de características por grupo
-    y verifica la integridad del DataFrame (nulos e infinitos).
-
-    Parámetros
-    ----------
-    features_df : pd.DataFrame
-        DataFrame con la matriz de características completa.
-    """
-    meta_cols = ["image_path", "class_name", "label"]
-    feat_cols = [c for c in features_df.columns if c not in meta_cols]
+    """Imprime filas, clases, nulos, infinitos y features por grupo."""
+    feat_cols = [c for c in features_df.columns if c not in META_COLS]
     grupos = get_feature_groups(features_df)
 
     print(f"{'Filas':.<30} {len(features_df)}")
@@ -735,13 +558,58 @@ def print_feature_summary(features_df: pd.DataFrame) -> None:
     print("Distribución de clases:")
     print(features_df["class_name"].value_counts().to_string())
     print()
-
-    nulls = features_df[feat_cols].isnull().sum().sum()
-    infs  = np.isinf(features_df[feat_cols].values).sum()
-    print(f"{'Valores nulos':.<30} {nulls}")
-    print(f"{'Valores infinitos':.<30} {infs}")
+    print(f"{'Valores nulos':.<30} {features_df[feat_cols].isnull().sum().sum()}")
+    print(f"{'Valores infinitos':.<30} {np.isinf(features_df[feat_cols].values).sum()}")
     print()
     print("Features por grupo:")
     for nombre, cols in grupos.items():
         print(f"  {nombre:.<28} {len(cols):>5}")
     print(f"  {'TOTAL':.<28} {sum(len(v) for v in grupos.values()):>5}")
+
+
+def verify_extractors(df_base: pd.DataFrame) -> None:
+    """Verifica dimensiones de cada extractor sobre una imagen por clase."""
+    expected = {
+        "global": 4,
+        "regional": 24,
+        "GLCM": 10,
+        "LBP": 26,
+        "Gabor": 32,
+        "HOG": 1764,
+        "PHOG": 1440,
+        "shape": 10 + SHAPE_THUMB[0] * SHAPE_THUMB[1],
+        "context": 28 + 10 + 26 + 32 + CONTEXT_THUMB[0] * CONTEXT_THUMB[1],
+    }
+
+    row = None
+    for class_name in ("health", "sick", "tb"):
+        sample = df_base[df_base["class_name"] == class_name]
+        if sample.empty:
+            continue
+        path = sample.iloc[0]["image_path"]
+        row = extract_features(path, 0, class_name, include_hog=True,
+                               include_phog=True, include_context=True)
+        if row is not None:
+            break
+    assert row is not None, "No se pudo extraer características de ninguna imagen."
+
+    grupos = {
+        "global": feat_intensity_global,
+        "regional": feat_intensity_regional,
+        "GLCM": feat_glcm,
+        "LBP": feat_lbp,
+        "Gabor": feat_gabor,
+        "HOG": feat_hog,
+        "PHOG": feat_phog,
+    }
+    bundle = preprocess_bundle(path)
+    img, mask = bundle["thorax"]
+    for name, fn in grupos.items():
+        n = len(fn(img, mask) if name in ("global", "regional", "GLCM", "LBP", "Gabor") else fn(img))
+        print(f"{name:>10}: {n}")
+        assert n == expected[name], f"{name}: esperado {expected[name]}, obtenido {n}"
+
+    assert len(feat_shape(mask)) == expected["shape"]
+    ctx_img, ctx_mask = bundle["context"]
+    assert len(feat_context(ctx_img, ctx_mask)) == expected["context"]
+    print("Verificación completada sin errores.")

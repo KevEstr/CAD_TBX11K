@@ -1,25 +1,25 @@
 """
 cad_tbx11k
 ==========
-Framework de análisis exploratorio, preprocesamiento y extracción de características
-para el dataset TBX11K de radiografías torácicas de tuberculosis.
+Framework de análisis exploratorio, segmentación, preprocesamiento y
+extracción de características para el dataset TBX11K de radiografías
+torácicas de tuberculosis.
 
 Módulos
 -------
-config        : variables de muestreo compartidas por todo el pipeline.
-data          : carga del dataset y construcción del DataFrame base.
-preprocessing : cadena de preprocesamiento (Bilateral Filter + CLAHE).
-features      : extractores de características (GLCM, LBP, HOG, intensidad).
-visualization : figuras de publicación para cada etapa del análisis.
+config            : variables de muestreo y protocolo compartidas.
+data              : carga del dataset y construcción del DataFrame base.
+lung_segmentation : segmentación pulmonar anatómica validada.
+preprocessing     : recorte torácico + Bilateral Filter + CLAHE.
+features          : textura, HOG, forma y contexto (con soporte de máscara).
+modeling          : CV anidada, métricas, calibración y McNemar.
+visualization     : figuras de publicación.
 
 Uso rápido
 ----------
->>> from cad_tbx11k.config import N_MUESTRA
->>> from cad_tbx11k.data import setup_kaggle_credentials, download_dataset
->>> from cad_tbx11k.data import get_data_root, build_base_dataframe
->>> from cad_tbx11k.preprocessing import preprocess
->>> from cad_tbx11k.features import extract_all_features
->>> from cad_tbx11k.visualization import set_publication_style
+>>> from src.preprocessing import preprocess_with_mask
+>>> from src.features import extract_features, get_feature_groups
+>>> from src.modeling import nested_cv, binary_metrics
 """
 
 from .config import (
@@ -28,6 +28,10 @@ from .config import (
     N_SEGUIMIENTO,
     N_REGIONAL,
     N_MODELO,
+    CV_OUTER,
+    CV_INNER,
+    RANDOM_STATE,
+    TARGET_SENSITIVITY,
 )
 
 from .data import (
@@ -41,10 +45,21 @@ from .data import (
     build_base_dataframe,
 )
 
+from .lung_segmentation import (
+    MaskQuality,
+    body_mask,
+    segment_lungs as segment_lungs_512,
+    thorax_bbox,
+    thorax_envelope,
+)
+
 from .preprocessing import (
     IMG_SIZE,
+    MODES,
     preprocess,
     preprocess_steps,
+    preprocess_with_mask,
+    preprocess_bundle,
     apply_bilateral_filter,
     apply_clahe,
 )
@@ -58,7 +73,7 @@ from .features import (
     print_feature_summary,
 )
 
-# visualization module excluded (not needed for deployment)
+# visualization module excluded (requires seaborn; not needed for deployment)
 
-__version__ = "1.0.0"
-__author__  = "CAD-TBX11K Pipeline"
+__version__ = "2.0.0"
+__author__ = "CAD-TBX11K Pipeline"

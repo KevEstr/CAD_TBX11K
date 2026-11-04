@@ -93,6 +93,9 @@ header p { color: #555; font-size: 0.85rem; margin-top: 0.3rem; }
 }
 .card h3 { font-size: 0.95rem; color: #2166AC; margin-bottom: 0.5rem; border-bottom: 1px solid #e0e4ea; padding-bottom: 0.3rem; }
 
+/* Image spans all 3 rows in right column */
+.image-span-all { grid-row: 1 / 4; }
+
 /* Diagnosis */
 .diagnosis-class {
   font-size: 1.3rem;
@@ -102,8 +105,7 @@ header p { color: #555; font-size: 0.85rem; margin-top: 0.3rem; }
   border-radius: 6px;
   margin-bottom: 0.5rem;
 }
-.diagnosis-class.health { background: #2166AC; color: #fff; }
-.diagnosis-class.sick { background: #4DAC26; color: #fff; }
+.diagnosis-class.no_tb { background: #2166AC; color: #fff; }
 .diagnosis-class.tb { background: #D01C8B; color: #fff; }
 
 .confidence-bar { display: flex; flex-direction: column; gap: 0.4rem; }
@@ -111,8 +113,7 @@ header p { color: #555; font-size: 0.85rem; margin-top: 0.3rem; }
 .bar-label { width: 3.5rem; font-size: 0.78rem; color: #555; text-transform: uppercase; }
 .bar-track { flex: 1; height: 10px; background: #eef1f5; border-radius: 5px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 5px; transition: width 0.4s; }
-.health-fill { background: #2166AC; }
-.sick-fill { background: #4DAC26; }
+.notb-fill { background: #2166AC; }
 .tb-fill { background: #D01C8B; }
 .bar-val { width: 3.5rem; text-align: right; font-size: 0.78rem; color: #333; }
 
@@ -133,8 +134,34 @@ header p { color: #555; font-size: 0.85rem; margin-top: 0.3rem; }
 .region-item .region-fill { height: 100%; border-radius: 4px; transition: width 0.4s; background: #D01C8B; }
 .region-item .region-val { width: 2.5rem; text-align: right; font-size: 0.78rem; }
 
-/* Top Features */
-#features-list { font-size: 0.82rem; }
+/* Top Features (dentro de collapsible details) */
+.tech-details.card {
+  padding: 0;
+  border: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  border-radius: 10px;
+}
+.tech-details summary {
+  background: #fff;
+  padding: 0.6rem 1rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #2166AC;
+  border-radius: 10px 10px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  list-style: none;
+}
+.tech-details summary::-webkit-details-marker { display: none; }
+.tech-details summary .summary-arrow { font-size: 0.8rem; color: #888; transition: transform 0.2s; }
+.tech-details[open] summary .summary-arrow { transform: rotate(90deg); }
+.tech-details[open] summary { border-bottom: 1px solid #e0e4ea; }
+.tech-details .tech-content {
+  padding: 1rem;
+}
+#features-list { font-size: 0.82rem; padding: 1rem 1rem 0; }
 .feature-item { display: flex; justify-content: space-between; padding: 0.15rem 0; color: #333; }
 .feature-item .fi-name { color: #444; }
 .feature-item .fi-val { color: #2166AC; font-weight: 600; }
@@ -147,11 +174,19 @@ header p { color: #555; font-size: 0.85rem; margin-top: 0.3rem; }
 .family-item .fm-fill { height: 100%; border-radius: 3px; background: #4DAC26; }
 .family-item .fm-val { width: 2.5rem; text-align: right; }
 
-/* Progress */
-#progress-card { grid-column: 1 / -1; }
-.progress-bar { height: 10px; background: #eef1f5; border-radius: 5px; overflow: hidden; margin-bottom: 0.3rem; }
+/* Progress - fuera del grid, ancho completo */
+.progress-bar-container {
+  background: #fff;
+  border-radius: 10px;
+  padding: 0.7rem 1rem;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  margin-bottom: 0.5rem;
+  text-align: center;
+}
+.progress-header { font-size: 0.85rem; color: #2166AC; font-weight: 600; margin-bottom: 0.25rem; }
+.progress-bar { height: 8px; background: #eef1f5; border-radius: 5px; overflow: hidden; }
 .progress-fill { height: 100%; background: #2166AC; border-radius: 5px; transition: width 0.3s; width: 0%; }
-.progress-text { font-size: 0.82rem; color: #555; }
+.progress-text { font-size: 0.78rem; color: #555; margin-top: 0.2rem; }
 
 /* Error */
 .error-card {

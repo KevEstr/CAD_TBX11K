@@ -14,7 +14,6 @@
     </header>
 
     <main>
-      <!-- State IDLE / SENDING -->
       <section id="upload-section">
         <div id="upload-zone" class="upload-zone">
           <p class="upload-hint">Arrastra una radiografía aquí o haz clic para seleccionar</p>
@@ -32,30 +31,36 @@
         </div>
       </section>
 
-      <!-- Loading -->
       <section id="loading-section" hidden>
         <div class="spinner"></div>
         <p>Analizando radiografía...</p>
       </section>
 
-      <!-- Results -->
       <section id="results-section" hidden>
+        <div id="progress-card" class="progress-bar-container" hidden>
+          <div class="progress-header">Mapa de Oclusión Detallado</div>
+          <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+          <p class="progress-text" id="progress-text">Generando...</p>
+        </div>
+
         <div class="results-grid">
 
-          <!-- Diagnosis Card -->
-          <div class="card diagnosis-card" id="diagnosis-card">
+          <div class="card diagnosis-card">
             <h3>Diagnóstico</h3>
             <div class="diagnosis-class" id="diagnosis-class"></div>
-            <div class="confidence-bar" id="confidence-bar">
-              <div class="bar-item"><span class="bar-label">health</span><div class="bar-track"><div class="bar-fill health-fill" id="bar-health"></div></div><span class="bar-val" id="val-health"></span></div>
-              <div class="bar-item"><span class="bar-label">sick</span><div class="bar-track"><div class="bar-fill sick-fill" id="bar-sick"></div></div><span class="bar-val" id="val-sick"></span></div>
-              <div class="bar-item"><span class="bar-label">tb</span><div class="bar-track"><div class="bar-fill tb-fill" id="bar-tb"></div></div><span class="bar-val" id="val-tb"></span></div>
+            <div class="confidence-bar">
+              <div class="bar-item"><span class="bar-label">No TB</span><div class="bar-track"><div class="bar-fill notb-fill" id="bar-notb"></div></div><span class="bar-val" id="val-notb"></span></div>
+              <div class="bar-item"><span class="bar-label">TB</span><div class="bar-track"><div class="bar-fill tb-fill" id="bar-tb"></div></div><span class="bar-val" id="val-tb"></span></div>
             </div>
             <div class="model-meta" id="model-meta"></div>
           </div>
 
-          <!-- Image + Overlay Card -->
-          <div class="card image-card">
+          <div class="card regions-card">
+            <h3>Regiones Pulmonares</h3>
+            <div id="regions-list"></div>
+          </div>
+
+          <div class="card image-card image-span-all">
             <h3>Radiografía</h3>
             <div class="overlay-container">
               <canvas id="image-canvas" width="512" height="512"></canvas>
@@ -63,37 +68,24 @@
                 <label>Overlay:</label>
                 <select id="overlay-select">
                   <option value="none">Ninguno</option>
-                  <option value="hog" selected>SHAP-HOG</option>
-                  <option value="occlusion" disabled>Oclusión (cargando...)</option>
+                  <option value="regions" selected>Regiones</option>
+                  <option value="occlusion">Oclusión</option>
                 </select>
               </div>
             </div>
           </div>
 
-          <!-- Regions Card -->
-          <div class="card regions-card" id="regions-card">
-            <h3>Regiones Pulmonares</h3>
-            <div id="regions-list"></div>
-          </div>
-
-          <!-- Top Features Card -->
-          <div class="card features-card" id="features-card">
-            <h3>Características Clave</h3>
-            <div id="features-list"></div>
-            <div id="families-list"></div>
-          </div>
-
-          <!-- Occlusion Progress Card -->
-          <div class="card progress-card" id="progress-card" hidden>
-            <h3>Mapa de Oclusión Detallado</h3>
-            <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-            <p class="progress-text" id="progress-text">Generando mapa de oclusión...</p>
-          </div>
+          <details class="card tech-details">
+            <summary><span>Detalle técnico</span><span class="summary-arrow">▶</span></summary>
+            <div class="tech-content">
+              <div id="features-list"></div>
+              <div id="families-list"></div>
+            </div>
+          </details>
 
         </div>
       </section>
 
-      <!-- Error -->
       <section id="error-section" hidden>
         <div class="error-card">
           <h3>Error</h3>
@@ -105,7 +97,7 @@
     </main>
 
     <footer>
-      <p>Modelo: XGBoost · Pipeline: BF + CLAHE + Lung Seg · Selector: MI N2000</p>
+      <p>Modelo: Regresión Logística v2 (textura) · 96 features · Umbral 0.081</p>
     </footer>
   </div>
 

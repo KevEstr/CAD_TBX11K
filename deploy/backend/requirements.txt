@@ -1,0 +1,14 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+websockets==13.0
+numpy==2.5.3
+opencv-python==5.0.0
+scikit-image==0.26.0
+scipy==1.18.1
+scikit-learn==1.9.1
+xgboost==3.4.1
+shap==0.46.0
+joblib==1.6.0
+Pillow==10.0.0
+python-multipart>=0.0.12
+matplotlib==3.11.2

@@ -1,0 +1,64 @@
+"""
+cad_tbx11k
+==========
+Framework de análisis exploratorio, preprocesamiento y extracción de características
+para el dataset TBX11K de radiografías torácicas de tuberculosis.
+
+Módulos
+-------
+config        : variables de muestreo compartidas por todo el pipeline.
+data          : carga del dataset y construcción del DataFrame base.
+preprocessing : cadena de preprocesamiento (Bilateral Filter + CLAHE).
+features      : extractores de características (GLCM, LBP, HOG, intensidad).
+visualization : figuras de publicación para cada etapa del análisis.
+
+Uso rápido
+----------
+>>> from cad_tbx11k.config import N_MUESTRA
+>>> from cad_tbx11k.data import setup_kaggle_credentials, download_dataset
+>>> from cad_tbx11k.data import get_data_root, build_base_dataframe
+>>> from cad_tbx11k.preprocessing import preprocess
+>>> from cad_tbx11k.features import extract_all_features
+>>> from cad_tbx11k.visualization import set_publication_style
+"""
+
+from .config import (
+    N_MUESTRA,
+    N_INTENSIDAD,
+    N_SEGUIMIENTO,
+    N_REGIONAL,
+    N_MODELO,
+)
+
+from .data import (
+    LABEL_MAP,
+    PALETTE,
+    VALID_EXTS,
+    setup_kaggle_credentials,
+    download_dataset,
+    get_data_root,
+    map_dataset_structure,
+    build_base_dataframe,
+)
+
+from .preprocessing import (
+    IMG_SIZE,
+    preprocess,
+    preprocess_steps,
+    apply_bilateral_filter,
+    apply_clahe,
+)
+
+from .features import (
+    REGIONS,
+    extract_features,
+    extract_all_features,
+    verify_extractors,
+    get_feature_groups,
+    print_feature_summary,
+)
+
+# visualization module excluded (not needed for deployment)
+
+__version__ = "1.0.0"
+__author__  = "CAD-TBX11K Pipeline"

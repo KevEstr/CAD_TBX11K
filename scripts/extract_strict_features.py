@@ -37,7 +37,7 @@ def main() -> None:
     parser.add_argument("--sample", type=int, default=0)
     args = parser.parse_args()
 
-    df = pd.read_csv(ROOT / "data" / "full_meta.csv")
+    df = pd.read_csv(ROOT / "data" / "df_model.csv")
     if args.sample:
         df = pd.concat([
             g.sample(min(args.sample, len(g)), random_state=42)

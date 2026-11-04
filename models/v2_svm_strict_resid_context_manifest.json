@@ -16,5 +16,5 @@
     "sens90": 0.9,
     "spec90": 0.4373658798283262
   },
-  "note": "Modelo descontaminado: la textura se residualiza contra contexto dentro de cada fold. Es una cota inferior conservadora, no el modelo de mayor accuracy."
+  "note": "Modelo descontaminado: la textura se residualiza contra contexto dentro de cada fold en la evaluación. Aquí se ajusta con todos los datos para uso como artefacto final. Es una cota inferior conservadora, no el modelo de mayor accuracy."
 }

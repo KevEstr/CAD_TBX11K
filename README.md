@@ -90,6 +90,7 @@ cad-tbx11k/
 │   └── 10_Interpretabilidad.ipynb
 ├── scripts/
 │   ├── build_model_meta.py          ← df_base.csv → df_model.csv (8.256)
+│   ├── fit_final_model.py           ← guarda el SVM descontaminado
 │   ├── rebuild_features.py          ← matriz principal (8.256 imágenes)
 │   ├── extract_strict_features.py   ← textura estricta/armonizada
 │   ├── validate_segmentation.py     ← validación con cajas de lesión
@@ -139,7 +140,9 @@ cad-tbx11k/
 ```
 
 `df_model.csv` se genera antes de extraer features. Ningún notebook anterior a
-05 lee un archivo producido por 05 o 06.
+05 lee un archivo producido por 05 o 06. La lista exacta de los 144 duplicados
+está en `src/dedup_drop_names.csv`, por lo que la deduplicación es reproducible
+sin depender de la matriz antigua.
 
 ---
 
@@ -297,7 +300,10 @@ python scripts/run_deconfound_v2.py
 python scripts/run_strict_deconfound.py
 python scripts/run_ipw_v2.py
 
-# 8. Notebooks
+# 8. Modelo final descontaminado
+python scripts/fit_final_model.py
+
+# 9. Notebooks
 jupyter nbconvert --to notebook --execute notebooks/03_Preprocesamiento.ipynb --inplace
 # ... 05 a 10
 ```

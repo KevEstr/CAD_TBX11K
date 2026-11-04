@@ -43,9 +43,12 @@ def main() -> None:
     parser.add_argument("--out", default="data/features_tbx11k_v2.csv")
     args = parser.parse_args()
 
-    meta_path = ROOT / "data" / "full_meta.csv"
+    meta_path = ROOT / "data" / "df_model.csv"
     if not meta_path.exists():
-        meta_path = ROOT / "data" / "df_base.csv"
+        raise FileNotFoundError(
+            "Falta data/df_model.csv. Genéralo primero con "
+            "`python scripts/build_model_meta.py` (deduplica df_base.csv)."
+        )
     df = pd.read_csv(meta_path)
     if args.sample:
         df = pd.concat([

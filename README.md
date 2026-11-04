@@ -89,6 +89,7 @@ cad-tbx11k/
 │   ├── 09_Evaluacion_Comparativa.ipynb
 │   └── 10_Interpretabilidad.ipynb
 ├── scripts/
+│   ├── build_model_meta.py          ← df_base.csv → df_model.csv (8.256)
 │   ├── rebuild_features.py          ← matriz principal (8.256 imágenes)
 │   ├── extract_strict_features.py   ← textura estricta/armonizada
 │   ├── validate_segmentation.py     ← validación con cajas de lesión
@@ -123,6 +124,22 @@ cad-tbx11k/
 - No hay IDs de paciente; la CV estratificada no puede agrupar por paciente.
 - Anotaciones COCO: 1.211 cajas de lesión en 799 imágenes TB
   (`ActiveTuberculosis` 972, `ObsoletePulmonaryTuberculosis` 239).
+
+### Cadena de archivos (sin dependencias invertidas)
+
+```text
+01_Carga_Datos.ipynb
+        └── data/df_base.csv                 (8.400 imágenes)
+                ├── 02, 03, 04              (EDA y preprocesamiento)
+                └── scripts/build_model_meta.py
+                        └── data/df_model.csv (8.256 tras dedup exacta)
+                                ├── scripts/rebuild_features.py → features_tbx11k_v2.csv
+                                ├── scripts/extract_strict_features.py → features_strict.csv
+                                └── 05–10 (features, selección, modelos, evaluación)
+```
+
+`df_model.csv` se genera antes de extraer features. Ningún notebook anterior a
+05 lee un archivo producido por 05 o 06.
 
 ---
 
@@ -262,7 +279,8 @@ pip install -r requirements.txt
 # 2. Segmentación y validación
 python scripts/validate_segmentation.py
 
-# 3. Features principales (8.256 imágenes)
+# 3. Metadatos de modelado (8.256) y features principales
+python scripts/build_model_meta.py
 python scripts/rebuild_features.py --workers 8
 
 # 4. Features estrictas/armonizadas

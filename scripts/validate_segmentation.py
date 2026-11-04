@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT))
 from src.lung_segmentation import segment_lungs  # noqa: E402
 
 COCO = ROOT / "data" / "TBX11K" / "annotations" / "json" / "TBX11K_trainval.json"
-META = ROOT / "data" / "full_meta.csv"
+META = ROOT / "data" / "df_model.csv"
 REPORTS = ROOT / "reports"
 REPORTS.mkdir(exist_ok=True)
 

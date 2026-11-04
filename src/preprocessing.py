@@ -1,84 +1,85 @@
 """
 cad_tbx11k.preprocessing
 =========================
-Módulo de preprocesamiento de radiografías torácicas del pipeline CAD-TBX11K.
+Preprocesamiento de radiografías torácicas del pipeline CAD-TBX11K.
 
-Define la cadena de preprocesamiento estándar aplicada a cada imagen antes
-de cualquier extracción de características:
+Cadena principal (modo ``'thorax'``):
 
-    imagen original → escala de grises → resize 256×256 → Bilateral Filter → CLAHE
+    imagen original → escala de grises → segmentación pulmonar a 512×512
+    → recorte torácico (sin poner ceros) → resize 256×256
+    → Bilateral Filter → CLAHE
 
-Cada paso tiene una función independiente para facilitar la inspección
-y comparación de efectos intermedios.
+La segmentación se delega en :mod:`src.lung_segmentation`, que implementa un
+campo pulmonar anatómico validado con las cajas de lesión de TBX11K. El recorte
+torácico conserva la textura original (incluidas las lesiones) y elimina el
+fondo, los marcadores y las esquinas de la adquisición, que son la principal
+fuente de atajo en TBX11K.
 
-Documentación de referencia
----------------------------
-- OpenCV bilateral filter : https://docs.opencv.org/4.x/d4/d86/group__imgproc__filter.html#ga9d7064d478c95d60003cf839430737ed
+Modos disponibles
+-----------------
+``'thorax'``
+    Recorte torácico + BF + CLAHE. **Modo principal.** No enmascara con ceros.
+``'lung'``
+    Como ``'thorax'``, pero el exterior de la máscara pulmonar se rellena con la
+    mediana de intensidad pulmonar (no con 0) para evitar bordes artificiales.
+``'context'``
+    Imagen completa + máscara del **fondo** (complemento del campo torácico).
+    Se usa para el control de sesgo por contexto/fuente.
+``'full'``
+    Imagen completa + BF + CLAHE, sin máscara.
+``'mask'``
+    Recorte con el exterior a 0. Solo por compatibilidad; **no** es el modo del
+    pipeline porque introduce la forma de la máscara como atajo.
+
+Referencias
+-----------
+- OpenCV bilateral filter : https://docs.opencv.org/4.x/d4/d86/group__imgproc__filter.html
 - OpenCV CLAHE            : https://docs.opencv.org/4.x/d6/db6/classcv_1_1CLAHE.html
-- OpenCV resize           : https://docs.opencv.org/4.x/da/d54/group__imgproc__transform.html#ga47a974309e9102f5f08231edc7e7529d
+- OpenCV resize           : https://docs.opencv.org/4.x/da/d54/group__imgproc__transform.html
 """
+
+from __future__ import annotations
 
 from typing import Optional, Tuple
 
 import cv2
 import numpy as np
-from scipy.ndimage import binary_fill_holes
 
-# ---------------------------------------------------------------------------
-# Parámetros por defecto del pipeline
-# ---------------------------------------------------------------------------
+from .lung_segmentation import (
+    MaskQuality,
+    SEG_SIZE,
+    segment_lungs as _segment_lungs_512,
+    strict_lung_mask,
+    thorax_bbox,
+)
 
 IMG_SIZE: Tuple[int, int] = (256, 256)
-"""Tamaño objetivo al que se redimensionan todas las imágenes (ancho × alto)."""
+"""Tamaño objetivo de la imagen preprocesada (ancho × alto)."""
 
 BF_D: int = 9
-"""Diámetro del vecindario utilizado por el Bilateral Filter."""
+"""Diámetro del vecindario del Bilateral Filter."""
 
 BF_SIGMA_COLOR: float = 80.0
-"""Sigma en el espacio de color del Bilateral Filter.
-Valores altos mezclan colores más distantes → mayor suavizado de color."""
+"""Sigma en el espacio de intensidad del Bilateral Filter."""
 
 BF_SIGMA_SPACE: float = 80.0
-"""Sigma en el espacio de coordenadas del Bilateral Filter.
-Valores altos mezclan píxeles más lejanos → mayor suavizado espacial."""
+"""Sigma en el espacio de coordenadas del Bilateral Filter."""
 
-CLAHE_CLIP_LIMIT: float = 40.0
-"""Límite de recorte del histograma para CLAHE.
-Valores altos permiten mayor realce de contraste pero pueden amplificar ruido."""
+CLAHE_CLIP_LIMIT: float = 2.0
+"""Límite de recorte de CLAHE (valor habitual 2–4; 40 saturaba el contraste)."""
 
 CLAHE_TILE_GRID: Tuple[int, int] = (8, 8)
-"""Tamaño de la cuadrícula de teselas para CLAHE.
-Cada tesela recibe su propia ecualización de histograma."""
+"""Cuadrícula de teselas de CLAHE."""
 
-SEG_MIN_AREA: int = 500
-"""Área mínima (px) de una componente para considerarla un pulmón."""
-
-SEG_MAX_CY: float = 200.0
-"""Centroide vertical máximo para aceptar una componente como pulmón."""
+MODES = ("thorax", "lung", "context", "full", "mask", "strict", "strict_harmonized")
 
 
 # ---------------------------------------------------------------------------
-# Pasos individuales del pipeline
+# Pasos individuales
 # ---------------------------------------------------------------------------
 
 def load_grayscale(path: str) -> Optional[np.ndarray]:
-    """
-    Carga una imagen desde disco y la convierte a escala de grises.
-
-    Parámetros
-    ----------
-    path : str
-        Ruta al archivo de imagen.
-
-    Retorna
-    -------
-    np.ndarray o None
-        Imagen en escala de grises (dtype uint8) o ``None`` si la carga falla.
-
-    Referencias
-    -----------
-    - cv2.imread: https://docs.opencv.org/4.x/d4/da8/group__imgcodecs.html
-    """
+    """Carga una imagen en escala de grises (uint8) o ``None`` si falla."""
     img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         print(f"[ERROR] No se pudo leer la imagen: {path}")
@@ -86,27 +87,7 @@ def load_grayscale(path: str) -> Optional[np.ndarray]:
 
 
 def resize_image(img: np.ndarray, size: Tuple[int, int] = IMG_SIZE) -> np.ndarray:
-    """
-    Redimensiona la imagen al tamaño objetivo utilizando interpolación
-    de área (``INTER_AREA``), recomendada para reducción de escala porque
-    minimiza el efecto de moiré.
-
-    Parámetros
-    ----------
-    img : np.ndarray
-        Imagen en escala de grises.
-    size : tuple de int
-        Tamaño destino ``(ancho, alto)``.
-
-    Retorna
-    -------
-    np.ndarray
-        Imagen redimensionada.
-
-    Referencias
-    -----------
-    - cv2.resize: https://docs.opencv.org/4.x/da/d54/group__imgproc__transform.html#ga47a974309e9102f5f08231edc7e7529d
-    """
+    """Redimensiona con interpolación de área (recomendada para reducción)."""
     return cv2.resize(img, size, interpolation=cv2.INTER_AREA)
 
 
@@ -116,35 +97,7 @@ def apply_bilateral_filter(
     sigma_color: float = BF_SIGMA_COLOR,
     sigma_space: float = BF_SIGMA_SPACE,
 ) -> np.ndarray:
-    """
-    Aplica el Filtro Bilateral para reducir ruido preservando bordes.
-
-    El Filtro Bilateral pondera los píxeles vecinos por similitud espacial
-    **y** por similitud de intensidad, de modo que los bordes (transiciones
-    abruptas de intensidad) no se suavizan.  Esto es especialmente útil en
-    radiografías, donde las fronteras entre tejidos son clínicamente relevantes.
-
-    Parámetros
-    ----------
-    img : np.ndarray
-        Imagen en escala de grises (uint8).
-    d : int
-        Diámetro del vecindario de cada píxel.
-    sigma_color : float
-        Sigma en el espacio de intensidad.
-    sigma_space : float
-        Sigma en el espacio de coordenadas.
-
-    Retorna
-    -------
-    np.ndarray
-        Imagen filtrada.
-
-    Referencias
-    -----------
-    - Bilateral Filter en OpenCV: https://docs.opencv.org/4.x/d4/d86/group__imgproc__filter.html#ga9d7064d478c95d60003cf839430737ed
-    - Tomasi & Manduchi (1998): "Bilateral filtering for gray and color images."
-    """
+    """Filtro bilateral: reduce ruido preservando bordes tisulares."""
     return cv2.bilateralFilter(img, d=d, sigmaColor=sigma_color, sigmaSpace=sigma_space)
 
 
@@ -153,170 +106,193 @@ def apply_clahe(
     clip_limit: float = CLAHE_CLIP_LIMIT,
     tile_grid: Tuple[int, int] = CLAHE_TILE_GRID,
 ) -> np.ndarray:
-    """
-    Aplica CLAHE (*Contrast Limited Adaptive Histogram Equalization*)
-    para realzar el contraste local de la imagen.
-
-    A diferencia de la ecualización global, CLAHE subdivide la imagen en
-    teselas (``tile_grid``) y ecualiza el histograma en cada una, luego
-    interpola en los bordes para evitar discontinuidades.  El parámetro
-    ``clip_limit`` limita la amplificación del contraste para controlar
-    el ruido en zonas homogéneas.
-
-    Parámetros
-    ----------
-    img : np.ndarray
-        Imagen en escala de grises (uint8), idealmente ya filtrada.
-    clip_limit : float
-        Umbral de recorte del histograma por tesela.
-    tile_grid : tuple de int
-        Número de teselas en ``(x, y)``.
-
-    Retorna
-    -------
-    np.ndarray
-        Imagen con contraste realzado.
-
-    Referencias
-    -----------
-    - CLAHE en OpenCV: https://docs.opencv.org/4.x/d6/db6/classcv_1_1CLAHE.html
-    - Zuiderveld (1994): "Contrast Limited Adaptive Histogram Equalization."
-    """
+    """CLAHE con límite de recorte bajo para no saturar opacidades."""
     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid)
     return clahe.apply(img)
 
 
 def segment_lungs(img: np.ndarray) -> np.ndarray:
-    """
-    Segmentación heurística del campo pulmonar sobre una imagen 256×256.
-
-    Pasos:
-    1. Umbral de Otsu invertido para aislar regiones oscuras (pulmones).
-    2. Eliminación de componentes que tocan el borde (fondo/fuera del cuerpo).
-    3. Selección de la componente lateral izquierda y derecha más grandes.
-    4. Relleno de huecos y dilatación suave.
-
-    Es una segmentación **heurística**, no una segmentación clínica validada.
-    Se usa para excluir el fondo antes de extraer características.
-
-    Parámetros
-    ----------
-    img : np.ndarray
-        Imagen en escala de grises, ya redimensionada a :data:`IMG_SIZE`.
-
-    Retorna
-    -------
-    np.ndarray
-        Máscara booleana con ``True`` en el campo pulmonar aproximado.
-
-    Referencias
-    -----------
-    - Otsu (1979): "A threshold selection method from gray-level histograms."
-    - OpenCV connected components: https://docs.opencv.org/4.x/d3/dc0/group__imgproc__shape.html
-    """
-    blur = cv2.GaussianBlur(img, (5, 5), 0)
-    _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-    n, labels, stats, cent = cv2.connectedComponentsWithStats(th, 8)
-    h, w = img.shape
-    candidatos = []
-
-    for i in range(1, n):
-        x, y0, w0, h0, area = stats[i]
-        if area < SEG_MIN_AREA:
-            continue
-        if x == 0 or y0 == 0 or x + w0 == w or y0 + h0 == h:
-            continue
-        cx, cy = cent[i]
-        if cy > SEG_MAX_CY:
-            continue
-        candidatos.append((area, i, cx, cy))
-
-    izquierda = [c for c in candidatos if c[2] < w / 2]
-    derecha = [c for c in candidatos if c[2] >= w / 2]
-    keep = []
-    if izquierda:
-        keep.append(max(izquierda, key=lambda x: x[0])[1])
-    if derecha:
-        keep.append(max(derecha, key=lambda x: x[0])[1])
-
-    if not keep:
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.ellipse(mask, (w // 2, h // 2), (w // 3, h // 3), 0, 0, 360, 1, -1)
-        return mask.astype(bool)
-
-    mask = np.isin(labels, keep)
-    mask = binary_fill_holes(mask)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
-    return mask.astype(bool)
+    """Compatibilidad: segmenta a 512 y devuelve la máscara al tamaño de entrada."""
+    h, w = img.shape[:2]
+    img512 = cv2.resize(img, SEG_SIZE, interpolation=cv2.INTER_AREA)
+    mask, _ = _segment_lungs_512(img512)
+    if (w, h) != SEG_SIZE:
+        mask = cv2.resize(mask.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST).astype(bool)
+    return mask
 
 
 # ---------------------------------------------------------------------------
-# Pipeline completo
+# Pipeline principal
 # ---------------------------------------------------------------------------
 
-def preprocess(path: str, segmentar: bool = True) -> Optional[np.ndarray]:
+def segment_image(path: str) -> tuple[Optional[np.ndarray], Optional[MaskQuality]]:
+    """Carga y segmenta una imagen a 512×512."""
+    img = load_grayscale(path)
+    if img is None:
+        return None, None
+    img512 = cv2.resize(img, SEG_SIZE, interpolation=cv2.INTER_AREA)
+    mask, quality = _segment_lungs_512(img512)
+    return mask, quality
+
+
+def preprocess_with_mask(
+    path: str,
+    modo: str = "thorax",
+) -> Optional[tuple[np.ndarray, Optional[np.ndarray], Optional[MaskQuality]]]:
+    """Preprocesa una imagen y devuelve ``(imagen, máscara, calidad)``.
+
+    La máscara está alineada con la imagen de 256×256 devuelta. En el modo
+    ``'context'`` la máscara marca el **fondo** (complemento del campo torácico).
     """
-    Ejecuta la cadena completa de preprocesamiento sobre una imagen.
+    if modo not in MODES:
+        raise ValueError(f"Modo de preprocesamiento desconocido: {modo}")
 
-    Pasos:
-    1. Carga en escala de grises.
-    2. Resize a :data:`IMG_SIZE` con interpolación de área.
-    3. Segmentación heurística del campo pulmonar y enmascarado del fondo.
-    4. Bilateral Filter (suavizado preservando bordes).
-    5. CLAHE (realce de contraste local).
+    if modo in ("strict", "strict_harmonized"):
+        bundle = preprocess_bundle(path)
+        if bundle is None:
+            return None
+        img, mask = bundle[modo]
+        return img, mask, bundle["quality"]
 
-    El fondo se reemplaza por 0 para que la extracción de características
-    no dependa del contexto fuera del pulmón.
+    img = load_grayscale(path)
+    if img is None:
+        return None
 
-    Parámetros
-    ----------
-    path : str
-        Ruta al archivo de imagen original.
-    segmentar : bool
-        Si es ``True`` (por defecto), enmascara el fondo con la segmentación
-        pulmonar. Si es ``False``, mantiene la imagen completa (útil para
-        análisis de sesgo de contexto).
+    img512 = cv2.resize(img, SEG_SIZE, interpolation=cv2.INTER_AREA)
+    mask512, quality = _segment_lungs_512(img512)
+
+    if modo == "full":
+        out = resize_image(img512)
+        out = apply_bilateral_filter(out)
+        out = apply_clahe(out)
+        return out, None, quality
+
+    if modo == "context":
+        # Imagen completa; la máscara es el fondo (fuera del campo torácico).
+        out = resize_image(img512)
+        out = apply_bilateral_filter(out)
+        out = apply_clahe(out)
+        ctx_mask = ~mask512
+        ctx_mask = cv2.resize(
+            ctx_mask.astype(np.uint8), IMG_SIZE, interpolation=cv2.INTER_NEAREST
+        ).astype(bool)
+        return out, ctx_mask, quality
+
+    bbox = thorax_bbox(mask512)
+    if bbox is None:
+        bbox = (int(0.06 * 512), int(0.04 * 512), int(0.94 * 512), int(0.96 * 512))
+
+    x0, y0, x1, y1 = bbox
+    crop = img512[y0:y1, x0:x1]
+    mask_crop = mask512[y0:y1, x0:x1]
+
+    out = cv2.resize(crop, IMG_SIZE, interpolation=cv2.INTER_AREA)
+    mask256 = cv2.resize(
+        mask_crop.astype(np.uint8), IMG_SIZE, interpolation=cv2.INTER_NEAREST
+    ).astype(bool)
+
+    out = apply_bilateral_filter(out)
+    out = apply_clahe(out)
+
+    if modo == "mask":
+        out = np.where(mask256, out, 0).astype(np.uint8)
+    elif modo == "lung":
+        # Relleno suave: el exterior toma la mediana pulmonar, no 0.
+        if mask256.any() and (~mask256).any():
+            mediana = int(np.median(out[mask256]))
+            out = np.where(mask256, out, mediana).astype(np.uint8)
+    return out, mask256, quality
+
+
+def preprocess(path: str, modo: str = "thorax") -> Optional[np.ndarray]:
+    """Preprocesa una imagen y devuelve solo la imagen de 256×256."""
+    result = preprocess_with_mask(path, modo=modo)
+    if result is None:
+        return None
+    img, _, _ = result
+    return img
+
+
+def preprocess_bundle(path: str) -> Optional[dict]:
+    """Segmenta una vez y devuelve las vistas ``thorax`` y ``context``.
+
+    Evita repetir la segmentación cuando se extraen las características
+    pulmonares y el control de fondo en la misma pasada.
 
     Retorna
     -------
-    np.ndarray o None
-        Imagen preprocesada (uint8, shape ``IMG_SIZE``) o ``None`` si
-        la imagen no puede cargarse.
+    dict con claves ``'thorax'``, ``'context'``, ``'quality'`` y ``'bbox'``.
     """
     img = load_grayscale(path)
     if img is None:
         return None
-    img = resize_image(img)
 
-    mask = segment_lungs(img) if segmentar else None
+    img512 = cv2.resize(img, SEG_SIZE, interpolation=cv2.INTER_AREA)
+    mask512, quality = _segment_lungs_512(img512)
+    bbox = thorax_bbox(mask512)
+    if bbox is None:
+        bbox = (int(0.06 * 512), int(0.04 * 512), int(0.94 * 512), int(0.96 * 512))
 
-    img = apply_bilateral_filter(img)
-    img = apply_clahe(img)
+    # Vista torácica: recorte sin ceros.
+    x0, y0, x1, y1 = bbox
+    crop = img512[y0:y1, x0:x1]
+    mask_crop = mask512[y0:y1, x0:x1]
+    thorax = cv2.resize(crop, IMG_SIZE, interpolation=cv2.INTER_AREA)
+    mask_thorax = cv2.resize(
+        mask_crop.astype(np.uint8), IMG_SIZE, interpolation=cv2.INTER_NEAREST
+    ).astype(bool)
+    thorax = apply_clahe(apply_bilateral_filter(thorax))
 
-    if segmentar:
-        img = np.where(mask, img, 0).astype(np.uint8)
-    return img
+    # Vista de contexto: imagen completa y máscara de fondo.
+    context = apply_clahe(apply_bilateral_filter(resize_image(img512)))
+    mask_context = cv2.resize(
+        (~mask512).astype(np.uint8), IMG_SIZE, interpolation=cv2.INTER_NEAREST
+    ).astype(bool)
+
+    # Vista estricta: máscara erosionada, recorte ajustado y exterior relleno
+    # con la mediana pulmonar. Elimina hombros, abdomen y esquinas.
+    strict512 = strict_lung_mask(mask512)
+    strict_bbox = thorax_bbox(
+        strict512, margin_frac=0.01, min_width_frac=0.55, min_height_frac=0.55
+    )
+    if strict_bbox is None:
+        strict_bbox = bbox
+    sx0, sy0, sx1, sy1 = strict_bbox
+    scrop = img512[sy0:sy1, sx0:sx1]
+    smask_crop = strict512[sy0:sy1, sx0:sx1]
+    strict = cv2.resize(scrop, IMG_SIZE, interpolation=cv2.INTER_AREA)
+    mask_strict = cv2.resize(
+        smask_crop.astype(np.uint8), IMG_SIZE, interpolation=cv2.INTER_NEAREST
+    ).astype(bool)
+    strict = apply_clahe(apply_bilateral_filter(strict))
+    if mask_strict.any() and (~mask_strict).any():
+        med = int(np.median(strict[mask_strict]))
+        strict = np.where(mask_strict, strict, med).astype(np.uint8)
+
+    # Vista estricta armonizada: normalización por percentiles dentro del
+    # pulmón, sin CLAHE, para reducir diferencias de adquisición.
+    harm = strict.copy()
+    if mask_strict.any():
+        vals = harm[mask_strict]
+        lo, hi = np.percentile(vals, 2), np.percentile(vals, 98)
+        if hi > lo:
+            harm = np.clip((harm.astype(float) - lo) / (hi - lo) * 255.0, 0, 255)
+            harm = harm.astype(np.uint8)
+        med = int(np.median(harm[mask_strict]))
+        harm = np.where(mask_strict, harm, med).astype(np.uint8)
+
+    return {
+        "thorax": (thorax, mask_thorax),
+        "context": (context, mask_context),
+        "strict": (strict, mask_strict),
+        "strict_harmonized": (harm, mask_strict),
+        "quality": quality,
+        "bbox": bbox,
+    }
 
 
 def preprocess_steps(path: str) -> Optional[dict[str, np.ndarray]]:
-    """
-    Ejecuta el pipeline paso a paso y retorna cada estado intermedio.
-
-    Útil para la comparación visual en los notebooks de análisis.
-
-    Parámetros
-    ----------
-    path : str
-        Ruta al archivo de imagen original.
-
-    Retorna
-    -------
-    dict o None
-        Diccionario con claves ``'original'``, ``'bilateral'`` y
-        ``'clahe'``, o ``None`` si la imagen no puede cargarse.
-    """
+    """Estados intermedios para inspección visual (modo ``'full'``)."""
     img = load_grayscale(path)
     if img is None:
         return None
@@ -328,3 +304,24 @@ def preprocess_steps(path: str) -> Optional[dict[str, np.ndarray]]:
         "bilateral": bilateral,
         "clahe": clahe_img,
     }
+
+
+# ---------------------------------------------------------------------------
+# Compatibilidad con la API anterior
+# ---------------------------------------------------------------------------
+
+def crop_bbox(
+    mask: np.ndarray,
+    margin: int = 8,
+    min_width_frac: float = 0.75,
+    min_height_frac: float = 0.80,
+) -> Optional[Tuple[int, int, int, int]]:
+    """Compatibilidad: caja torácica a partir de una máscara de cualquier tamaño."""
+    h, w = mask.shape
+    box = thorax_bbox(mask, margin_frac=0.0, min_width_frac=min_width_frac,
+                      min_height_frac=min_height_frac)
+    if box is None:
+        return None
+    x0, y0, x1, y1 = box
+    return (max(0, x0 - margin), max(0, y0 - margin),
+            min(w, x1 + margin), min(h, y1 + margin))

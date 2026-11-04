@@ -1,17 +1,27 @@
-# Dataset — no se sube por tamaño
+# Dataset
 data/
 kaggle.json
 ~/.kaggle/
 
-# Outputs
-features_tbx11k.csv
+# Outputs generados
 *.csv
+features_tbx11k.csv
 
-# Checkpoints y pesos
+# Binarios de modelos (reproducibles con scripts/)
+models/*.joblib
 *.pth
 *.h5
 *.hdf5
 checkpoints/
+
+# Logs de ejecución
+logs/
+
+# Figuras de depuración (las finales de reports/ y reports/v2/ sí se conservan)
+reports/seg_fail*.png
+reports/seg_proto.png
+reports/03_crop_ejemplos.png
+reports/v2_strict_ejemplos.png
 
 # Python
 __pycache__/

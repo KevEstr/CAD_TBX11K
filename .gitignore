@@ -7,6 +7,9 @@ kaggle.json
 *.csv
 features_tbx11k.csv
 
+# Entregables generados (PDF/HTML)
+exports/
+
 # Binarios de modelos (reproducibles con scripts/)
 models/*.joblib
 *.pth

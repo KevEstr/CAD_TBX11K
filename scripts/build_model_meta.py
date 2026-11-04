@@ -6,13 +6,15 @@ Orden del pipeline:
     05 → data/df_model.csv       (8.256 tras deduplicación exacta)
     06–10 → data/df_model.csv
 
-La deduplicación canónica se hace sobre la matriz de características antigua
-(`data/features_tbx11k.csv`): se eliminan filas con vector de 3.300 features
-idéntico. Eso reproduce exactamente las 8.256 imágenes usadas en el pipeline
-v2 (144 duplicados, todos de `sick`).
+La lista canónica de 144 duplicados exactos está en
+`src/dedup_drop_names.csv` (todos de `sick`). Esa lista se obtuvo de la
+deduplicación exacta de la matriz antigua y permite reproducir las 8.256
+imágenes sin depender de `data/features_tbx11k.csv`.
 
-Si la matriz antigua no existe, se usa un respaldo por hash exacto de imagen
-(MD5) y se advierte de que el conjunto puede diferir.
+Orden de preferencia:
+1. `src/dedup_drop_names.csv` (canónico, reproducible).
+2. Deduplicación sobre `data/features_tbx11k.csv` (si existe).
+3. Hash MD5 exacto de imagen (respaldo; puede dar 8.274).
 
 Uso:
     python scripts/build_model_meta.py
@@ -28,6 +30,16 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
+
+
+def dedup_by_names(df_base: pd.DataFrame) -> pd.DataFrame | None:
+    """Elimina los duplicados exactos listados en `src/dedup_drop_names.csv`."""
+    path = ROOT / "src" / "dedup_drop_names.csv"
+    if not path.exists():
+        return None
+    names = set(pd.read_csv(path)["image_name"])
+    keep = ~df_base["image_path"].map(lambda p: Path(p).name).isin(names)
+    return df_base.loc[keep].copy()
 
 
 def dedup_by_features(df_base: pd.DataFrame) -> pd.DataFrame | None:
@@ -53,7 +65,10 @@ def main() -> None:
     df_base = pd.read_csv(DATA / "df_base.csv")
     print(f"df_base: {len(df_base)} | {df_base['class_name'].value_counts().to_dict()}")
 
-    df_model = dedup_by_features(df_base)
+    df_model = dedup_by_names(df_base)
+    if df_model is None:
+        print("AVISO: no existe src/dedup_drop_names.csv; se intenta con features.")
+        df_model = dedup_by_features(df_base)
     if df_model is None:
         print("AVISO: no existe data/features_tbx11k.csv; se usa dedup por MD5.")
         df_model = dedup_by_md5(df_base)

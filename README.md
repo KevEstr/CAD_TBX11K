@@ -1,6 +1,67 @@
 # cad-tbx11k
 
-Pipeline de análisis exploratorio, preprocesamiento y extracción de características sobre el dataset **TBX11K**, como parte del proyecto de diagnóstico asistido por computador (CAD) para tuberculosis a partir de radiografías de tórax.
+Pipeline de análisis, segmentación pulmonar y modelado clásico sobre **TBX11K**
+para un CAD de tuberculosis a partir de radiografías de tórax.
+
+**Versión 2.0** — segmentación validada con cajas de lesión, features con
+soporte de máscara, CV anidada, calibración y **control cuantitativo del atajo
+de contexto/fuente**.
+
+---
+
+## Resultado principal (honesto)
+
+La segmentación anterior (Otsu invertido) dejaba fuera las lesiones. La nueva
+segmentación las incluye. Pero al medir el atajo de fuente aparece el hallazgo
+central del proyecto:
+
+| Modelo (5-fold anidada, OOF) | BalAcc | Sens TB | Espec | AP TB | AUC |
+|---|---:|---:|---:|---:|---:|
+| Contexto/fondo solo (SVM) | **0.927** | 0.920 | 0.934 | 0.889 | 0.974 |
+| Textura pulmonar cruda (SVM) | 0.870 | 0.836 | 0.904 | 0.714 | 0.936 |
+| Textura estricta, sin pared (SVM) | 0.874 | 0.868 | 0.881 | 0.745 | 0.941 |
+| Textura + forma + contexto (LR) | 0.934 | 0.925 | 0.943 | 0.893 | 0.976 |
+| **Textura estricta residualizada (SVM)** | **0.735** | 0.752 | 0.717 | 0.366 | 0.805 |
+
+**Lectura:** el contexto solo supera a la textura pulmonar. Añadir forma y
+contexto infla el rendimiento a 0.934. Al residualizar la textura contra el
+contexto (eliminar la parte de la textura explicable por la fuente), el
+rendimiento baja a **0.735**. Esa es la cota inferior conservadora atribuible
+al pulmón; el 0.93 no es un modelo de TB, es un modelo de adquisición/fuente.
+
+La conclusión defendible es: **con TBX11K, la señal de textura pulmonar
+descontaminada es moderada (~0.74 BalAcc); el rendimiento alto reportado por
+el pipeline anterior estaba contaminado por el contexto.** No se puede
+“arreglar” el dataset con post-procesado; las opciones reales son datos
+externos con adquisición balanceada o adaptación de dominio/DL.
+
+---
+
+## Qué cambió respecto a la versión anterior
+
+1. **Segmentación reemplazada** (`src/lung_segmentation.py`):
+   máscara corporal + contraste local multi-escala + separación izquierda/
+   derecha + envolvente convexa + margen perilesional. Validada con las 1.211
+   cajas de lesión de TBX11K.
+2. **Validación cuantitativa de la máscara**:
+   cobertura media de cajas 0.912 (antes 0.539); 89.1 % de imágenes con
+   cobertura ≥ 0.8 (antes 15.3 %); centroide dentro 99.1 %; fallback 1.25 %.
+3. **Features con soporte de máscara** (`src/features.py`):
+   intensidad/GLCM/LBP/Gabor solo dentro del campo pulmonar; exterior relleno
+   con la mediana (no con 0). HOG sobre el recorte completo, sin máscara.
+   Contraste robusto `p95−p5` en lugar de `max−min` (elimina el artefacto
+   `ID_contrast ≈ 245`).
+4. **Separación explícita de familias**:
+   `texture` (96), `hog` (1.764), `shape` (64), `context` (352),
+   `quality` (4). Forma y contexto son **controles de sesgo**, no features
+   del modelo principal.
+5. **CV anidada** (5 folds externos × 3 internos), selección ANOVA F dentro
+   del fold, umbral clínico anidado, calibración a prevalencia real,
+   bootstrap y McNemar con Holm.
+6. **Corrección del atajo**: `ContextResidualizer` en `src/modeling.py`
+   residualiza la textura contra contexto/forma dentro de cada fold.
+7. **COCO corregido**: se usan las categorías 1 y 2 (1.211 cajas); antes el
+   filtro caía en la categoría 2 y solo veía 239 cajas.
 
 ---
 
@@ -8,15 +69,14 @@ Pipeline de análisis exploratorio, preprocesamiento y extracción de caracterí
 
 ```text
 cad-tbx11k/
-│
-├── src/                             ← Módulo Python reutilizable (framework)
-│   ├── __init__.py                  ← Punto de entrada único del paquete
-│   ├── config.py                    ← Variables de muestreo compartidas (única fuente de verdad)
-│   ├── data.py                      ← Carga del dataset y construcción del DataFrame base
-│   ├── preprocessing.py             ← Segmentación pulmonar + BF + CLAHE
-│   ├── features.py                  ← Extractores de características (GLCM, LBP, HOG, intensidad)
-│   └── visualization.py             ← Figuras de publicación para cada etapa del análisis
-│
+├── src/
+│   ├── config.py              ← muestreo y protocolo
+│   ├── data.py                ← carga del dataset
+│   ├── lung_segmentation.py   ← segmentación pulmonar validada
+│   ├── preprocessing.py       ← recorte torácico, strict, armonizado
+│   ├── features.py            ← textura, HOG, forma, contexto
+│   ├── modeling.py            ← CV anidada, métricas, residualización
+│   └── visualization.py       ← figuras
 ├── notebooks/
 │   ├── 01_Carga_Datos.ipynb
 │   ├── 02_Analisis_Exploratorio.ipynb
@@ -26,428 +86,251 @@ cad-tbx11k/
 │   ├── 06_Seleccion_Caracteristicas.ipynb
 │   ├── 07_Desbalanceo.ipynb
 │   ├── 08_Modelos_ML.ipynb
-│   └── 09_Evaluacion_Comparativa.ipynb
-│
-├── data/                            ← Dataset y archivos generados (excluido de Git)
-│   ├── TBX11K/                      ← Dataset descargado manualmente desde Kaggle
-│   │   └── imgs/
-│   │       ├── health/
-│   │       ├── sick/
-│   │       └── tb/
-│   ├── df_base.csv                  ← DataFrame base generado en notebook 01
-│   └── features_tbx11k.csv         ← Matriz de características generada en notebook 05
-│
-├── kaggle.json                      ← Credenciales Kaggle (excluido de Git)
-├── requirements.txt
-├── .gitignore
-└── README.md
+│   ├── 09_Evaluacion_Comparativa.ipynb
+│   └── 10_Interpretabilidad.ipynb
+├── scripts/
+│   ├── rebuild_features.py          ← matriz principal (8.256 imágenes)
+│   ├── extract_strict_features.py   ← textura estricta/armonizada
+│   ├── validate_segmentation.py     ← validación con cajas de lesión
+│   ├── run_modeling_v2.py           ← CV anidada de familias/modelos
+│   ├── run_imbalance_v2.py          ← class_weight vs SMOTE/under/over
+│   ├── run_deconfound_v2.py         ← residualización contexto/forma
+│   ├── run_strict_deconfound.py     ← strict/harmonized + residualización
+│   └── run_ipw_v2.py                ← ponderación por propensión inversa
+├── data/                      ← dataset y artefactos (excluido de Git)
+├── models/                    ← modelos finales
+├── reports/                   ← figuras
+└── exports/                   ← PDF/HTML
 ```
-
-Los notebooks importan directamente del módulo `src`. Cualquier cambio en un parámetro del framework (por ejemplo, `CLAHE_CLIP_LIMIT`) se propaga de forma consistente a todo el pipeline.
 
 ---
 
 ## Dataset
 
-El proyecto utiliza **TBX11K**, un dataset de radiografías de tórax desarrollado para investigación en detección de tuberculosis.
-
-**Fuente:** [TBX11K — mmcheng.net](https://mmcheng.net/tb/)  
+**Fuente:** [TBX11K — mmcheng.net](https://mmcheng.net/tb/) ·
 **Kaggle:** [usmanshams/tbx-11](https://www.kaggle.com/datasets/usmanshams/tbx-11)
 
-El subconjunto utilizado corresponde a **8.400 radiografías etiquetadas** (8274 tras eliminar duplicados exactos) de los conjuntos de entrenamiento y validación, organizadas en tres clases:
+| Clase | Etiqueta | Imágenes etiquetadas | Únicas tras deduplicar |
+|---|---:|---:|---:|
+| `health` | 0 | 3.800 | 3.800 |
+| `sick` | 1 | 3.800 | 3.656 |
+| `tb` | 2 | 800 | 800 |
+| **Total** | | **8.400** | **8.256** |
 
-| Clase    | Etiqueta | Descripción                                         |
-|----------|:--------:|-----------------------------------------------------|
-| `health` |    0     | Radiografía de persona sana                         |
-| `sick`   |    1     | Persona enferma, no diagnosticada con TB            |
-| `tb`     |    2     | Tuberculosis confirmada                             |
-
-### Descarga manual del dataset
-
-Dado que la red institucional puede bloquear la descarga automática via `kagglehub`, el dataset debe descargarse manualmente:
-
-1. Entrar a [kaggle.com/datasets/usmanshams/tbx-11](https://www.kaggle.com/datasets/usmanshams/tbx-11) desde el navegador.
-2. Hacer clic en **Download**.
-3. Descomprimir el ZIP dentro de `data/` de modo que quede `data/TBX11K/imgs/...`.
-4. En el notebook 01, definir la ruta manualmente:
-
-```python
-DATA_ROOT = r"C:\ruta\al\proyecto\data\TBX11K"
-```
+- Los 144 duplicados exactos están todos en `sick`.
+- El conjunto `test` (3.302 imágenes, `unknown_*.png`) **no tiene etiquetas
+  públicas** y no se usa. Se documenta como limitación.
+- No hay IDs de paciente; la CV estratificada no puede agrupar por paciente.
+- Anotaciones COCO: 1.211 cajas de lesión en 799 imágenes TB
+  (`ActiveTuberculosis` 972, `ObsoletePulmonaryTuberculosis` 239).
 
 ---
 
-## Setup
+## Pipeline
 
-### 1. Crear el entorno virtual
+### 1. Segmentación pulmonar (`src/lung_segmentation.py`)
 
-```bash
-python -m venv venv
-```
+1. Máscara corporal por componentes oscuras conectadas al borde.
+2. Score de oscuridad local `gaussiano(σ=24) − imagen` (robusto a
+   iluminación global).
+3. Separación izquierda/derecha y eliminación del mediastino central.
+4. Envolvente convexa + margen de 20 px: incluye opacidades y lesiones
+   periféricas/apicales.
+5. Control de calidad: área, balance, contraste y `fallback`.
+6. Máscara **estricta** adicional (erosión 12 px) para análisis de
+   parénquima sin pared torácica.
 
-### 2. Activar el entorno
+La máscara principal es un **campo pulmonar con margen**, no una
+segmentación clínica de parénquima. Se reporta como tal.
 
-```bash
-# Windows
-venv\Scripts\activate
+### 2. Preprocesamiento (`src/preprocessing.py`)
 
-# macOS / Linux
-source venv/bin/activate
-```
+| Modo | Qué hace | Uso |
+|---|---|---|
+| `thorax` | recorte torácico + BF + CLAHE | pipeline principal |
+| `lung` | como `thorax`, exterior = mediana pulmonar | control |
+| `strict` | máscara erosionada, recorte ajustado, exterior = mediana | textura sin pared |
+| `strict_harmonized` | strict + normalización p2–p98, sin CLAHE | control de adquisición |
+| `context` | imagen completa + máscara de fondo | control de fuente |
+| `full` | imagen completa + BF + CLAHE | referencia |
+| `mask` | exterior a 0 | solo compatibilidad |
 
-### 3. Instalar dependencias
+### 3. Features (`src/features.py`)
 
-```bash
+| Familia | N | Contenido |
+|---|---:|---|
+| `texture` | 96 | intensidad global/regional, GLCM, LBP, Gabor dentro de la máscara |
+| `hog` | 1.764 | HOG 32×32, 7×7 bloques, mapeable a posición espacial |
+| `shape` | 64 | geometría de la máscara + miniatura 8×8 |
+| `context` | 352 | intensidad/textura del fondo + miniatura 16×16 |
+| `quality` | 4 | área, balance, contraste, fallback |
+| `strict_*` / `stricth_*` | 212 | textura estricta y armonizada |
+
+Total de la matriz principal: **2.290 features** para 8.256 imágenes.
+
+### 4. Modelado (`src/modeling.py`)
+
+- CV externa 5-fold estratificada; CV interna 3-fold.
+- Selección ANOVA F (`f_classif`) **dentro del fold**; determinista.
+- Modelos: Dummy, LR, SVM RBF, RandomForest, XGBoost.
+- Métricas: balanced accuracy, sensibilidad/especificidad TB, AP, AUC,
+  Brier, bootstrap estratificado y McNemar con Holm.
+- Umbral clínico: el **mayor** umbral que mantiene sensibilidad ≥ 0.90
+  (maximiza especificidad).
+- Calibración: corrección de prior a la prevalencia real
+  (0.0969) para modelos con `class_weight='balanced'`.
+- `ContextResidualizer`: elimina de la textura la parte linealmente
+  explicable por contexto/forma, ajustado dentro de cada fold.
+
+---
+
+## Resultados
+
+### Segmentación
+
+| Método | Cobertura media | Cobertura ≥0.8 | Centroide dentro |
+|---|---:|---:|---:|
+| Otsu anterior | 0.539 | 15.3 % | 73.1 % |
+| Nueva segmentación | **0.912** | **89.1 %** | **99.1 %** |
+
+Calidad por clase: área 0.49 (health), 0.46 (sick), 0.52 (tb); balance
+0.82–0.85; fallback 0–1.2 %. La diferencia de área entre clases es una señal
+residual de forma que el baseline `shape` cuantifica.
+
+### Familias y modelos
+
+| Conjunto | Modelo | BalAcc (Youden) | Sens | Espec | AP | AUC |
+|---|---|---:|---:|---:|---:|---:|
+| texture | LR | 0.815 | 0.811 | 0.819 | 0.591 | 0.890 |
+| texture | SVM | 0.870 | 0.836 | 0.904 | 0.714 | 0.936 |
+| texture | XGB | 0.851 | 0.850 | 0.852 | 0.729 | 0.923 |
+| texture | RF | 0.854 | 0.842 | 0.866 | 0.732 | 0.927 |
+| hog | LR | 0.779 | 0.774 | 0.785 | 0.468 | 0.850 |
+| texture+hog | LR | 0.855 | 0.826 | 0.883 | 0.697 | 0.922 |
+| context | LR | 0.892 | 0.888 | 0.897 | 0.807 | 0.952 |
+| context | SVM | 0.927 | 0.920 | 0.934 | 0.889 | 0.974 |
+| shape | LR | 0.652 | 0.698 | 0.607 | 0.191 | 0.697 |
+| texture+shape+context | LR | 0.934 | 0.925 | 0.943 | 0.893 | 0.976 |
+
+### Corrección del atajo
+
+| Conjunto | Modelo | BalAcc | AP | AUC |
+|---|---|---:|---:|---:|
+| textura cruda | SVM | 0.870 | 0.714 | 0.936 |
+| textura local (sin intensidad global) | SVM | 0.853 | 0.669 | 0.920 |
+| textura residualizada vs contexto | SVM | 0.720 | 0.365 | 0.798 |
+| textura estricta | SVM | 0.874 | 0.745 | 0.941 |
+| **textura estricta residualizada vs contexto** | **SVM** | **0.735** | **0.366** | **0.805** |
+| textura armonizada residualizada | SVM | 0.711 | 0.326 | 0.778 |
+| IPW (propensión inversa) | SVM | 0.872 | 0.745 | 0.937 |
+
+La residualización es la única corrección que elimina el atajo; IPW y la
+armonización no lo corrigen porque el sesgo está **dentro de la textura**,
+no solo en las esquinas. La máscara estricta mejora ligeramente la cota
+descontaminada (0.735 vs 0.720).
+
+### Calibración (LR textura)
+
+- Brier sin calibrar: 0.120.
+- Brier calibrada a prevalencia: **0.057**.
+- Umbral Youden calibrado: 0.081 → sens 0.811, espec 0.819.
+- Sensibilidad ≥ 0.90: umbral 0.041 → sens 0.900, espec 0.672. No alcanza el
+  perfil OMS (≥90 % sens, ≥70 % espec).
+
+### Desbalanceo
+
+| Estrategia | BalAcc | Recall TB | AP |
+|---|---:|---:|---:|
+| SMOTE | 0.814 | 0.778 | 0.600 |
+| `class_weight='balanced'` | 0.812 | 0.773 | 0.599 |
+| RandomOverSampler | 0.805 | 0.760 | 0.596 |
+| RandomUnderSampler | 0.803 | 0.774 | 0.586 |
+| Sin desbalanceo | 0.702 | 0.418 | 0.626 |
+
+Se recomienda `class_weight='balanced'` por simplicidad; SMOTE no aporta una
+mejora que justifique su coste.
+
+---
+
+## Cómo reproducir
+
+```powershell
+# 1. Entorno
+.\venv\Scripts\activate
 pip install -r requirements.txt
+
+# 2. Segmentación y validación
+python scripts/validate_segmentation.py
+
+# 3. Features principales (8.256 imágenes)
+python scripts/rebuild_features.py --workers 8
+
+# 4. Features estrictas/armonizadas
+python scripts/extract_strict_features.py --workers 8
+
+# 5. Modelado principal
+python scripts/run_modeling_v2.py
+
+# 6. Desbalanceo
+python scripts/run_imbalance_v2.py
+
+# 7. Corrección del atajo
+python scripts/run_deconfound_v2.py
+python scripts/run_strict_deconfound.py
+python scripts/run_ipw_v2.py
+
+# 8. Notebooks
+jupyter nbconvert --to notebook --execute notebooks/03_Preprocesamiento.ipynb --inplace
+# ... 05 a 10
 ```
 
-### 4. Registrar el kernel de Jupyter
+Salidas principales:
 
-```bash
-python -m ipykernel install --user --name=cad-tbx11k
-```
-
-Seleccionar el kernel `cad-tbx11k` desde Jupyter Notebook o Visual Studio Code.
-
-### 5. Credenciales de Kaggle (opcional)
-
-Si la red permite conexión a Kaggle, descargar `kaggle.json` desde **kaggle.com → Settings → API → Create New Token** y colocarlo en la raíz del proyecto. El archivo está excluido por `.gitignore`.
+- `data/seg_summary_v2.json`
+- `data/features_tbx11k_v2.csv`
+- `data/features_strict.csv`
+- `data/v2/summary_models.csv`
+- `data/v2/deconfound_summary.csv`
+- `data/v2/strict_deconfound_summary.csv`
+- `data/v2/ipw_summary.csv`
+- `models/v2_lr_texture.joblib`
+- `models/v2_svm_strict_resid_context.joblib`
+- `reports/03_segmentacion_*.png`
+- `reports/v2/*.png`
 
 ---
 
-## Orden de ejecución
+## Limitaciones
 
-```text
-01 → 02 → 03 → 04 → 05    (datos y características)
-06 → 07 → 08 → 09          (selección, desbalanceo, modelado y evaluación)
-```
-
-Cada notebook guarda sus salidas en `data/` para ser reutilizadas por los siguientes:
-
-| Notebook | Genera |
-|---|---|
-| 01 | `data/df_base.csv` |
-| 05 | `data/features_tbx11k.csv` |
-| 06 | `X_full.npy`, `y_full.npy`, `full_meta.csv`, `06_seleccion.json`, `06_cv_resultados.csv`, `06_cv_por_fold.csv`, `06_selected_feature_names.json`, `06_scores.csv`, `06_redundancia_hog_phog.json` |
-| 07 | `07_estrategia.json`, `07_cv_resultados.csv`, `07_cv_por_fold.csv` |
-| 08 | `models/08_*.joblib`, `08_manifest.json`, `08_cv_resumen.csv`, `08_cv_por_fold.csv`, `08_mejores_params.json`, `08_oof_predicciones.csv`, `08_oof_scores.npz` |
-| 09 | `09_resultados_globales.csv`, `09_resultados_por_clase.csv`, `09_calibracion.csv`, `09_recomendacion.json` |
-
----
-
-## Modelado y evaluación (06–09)
-
-- **06** deduplica sobre las 8400 y usa **las 8274 imágenes** con CV 5-fold. La selección
-  de features se ajusta **dentro de cada fold** y la regla 1-SE usa el error estándar.
-- **07** elige la estrategia de desbalanceo por CV 5-fold sobre las 8274, con el selector
-  del 06 ajustado dentro de cada fold.
-- **08** entrena cinco modelos + Dummy con CV anidada 5×3 y selector dentro de cada fold
-  externo. Genera predicciones **out-of-fold** para las 8274 y modelos finales con todas.
-- **09** evalúa las predicciones out-of-fold: métricas globales y por clase, ROC/AP,
-  matrices de confusión, bootstrap, McNemar (global y `tb`) con Holm y calibración.
-
-**Protocolo:** no hay hold-out ni test separado. Todas las imágenes participan en la CV;
-la estimación es out-of-fold y el modelo final se entrena con las 8274.
-
-**Limitaciones:** la segmentación pulmonar es heurística (Otsu + morfología + componentes
-conectados), no una segmentación clínica validada; la CV no equivale a una prueba externa independiente; no hay
-identificadores de paciente; los resultados no son directamente comparables con el
-benchmark oficial de TBX11K (6600/1800/2800). `AP` es Average Precision, no el área
-trapezoidal de la curva PR. La estrategia de desbalanceo se eligió con LR (decisión
-práctica, no óptima por modelo); `N` se fijó con la CV del 06 y no se retunea dentro de
-cada fold del 08; la selección de modelo y su estimación comparten las predicciones OOF
-(optimismo leve). La comparación de preprocesamiento del notebook 03 es un experimento
-controlado sobre un subconjunto. Las métricas OOF son la estimación de la CV; el modelo
-final se entrena con las 8274 y su rendimiento en datos independientes es desconocido. La
-estimación OOF del procedimiento completo (selector + hiperparámetros + selección de
-modelo) está en 08_procedimiento.json.
+1. **Sesgo de fuente**: TBX11K confunde clase con adquisición. La textura
+   contiene señal de fuente; la residualización la elimina y el rendimiento
+   baja a ~0.735. No hay forma de mantener 0.93 sin usar el atajo.
+2. **Segmentación**: no hay máscaras manuales de pulmón; la validación usa
+   cajas de lesión. La máscara es un campo pulmonar con margen, no
+   parénquima fino.
+3. **Test no usado**: 3.302 imágenes sin etiquetas públicas. No hay
+   validación externa.
+4. **Sin IDs de paciente**: la CV no puede agrupar por paciente; los
+   duplicados perceptuales (dHash 8×8) son un control débil.
+5. **Umbral**: el umbral de sensibilidad ≥0.90 se elige en CV anidada, pero
+   sigue siendo una estimación interna.
+6. **Modelo descontaminado**: es una cota inferior conservadora. La
+   residualización puede eliminar también señal pulmonar correlacionada con
+   la fuente; el valor verdadero está entre 0.735 y 0.870.
 
 ---
 
-## Configuración central (`src/config.py`)
+## Recomendación
 
-Todas las variables de muestreo se definen **una sola vez** en `src/config.py`. Regla del proyecto: **un nombre = un valor en todos los notebooks**. Para cambiar cuántas imágenes usa el pipeline, edita ese archivo, nunca los notebooks.
-
-| Variable | Descripción | Valor |
-|---|---|---|
-| `N_MUESTRA` | Imágenes por clase cargadas en `df_base` (techo de datos). `None` = dataset completo. | `None` |
-| `N_INTENSIDAD` | Histogramas y métricas de intensidad (notebooks 02 y 03). | `200` |
-| `N_SEGUIMIENTO` | Tabla de seguimiento antes/después del preprocesamiento (notebook 03). | `200` |
-| `N_REGIONAL` | Análisis regional por región espacial (rectángulo) (notebook 04). | `200` |
-| `N_MODELO` | Imágenes por clase para la extracción de features (notebook 05). `None` = dataset completo (todas las imágenes). | `None` |
-
-```python
-from src.config import N_MUESTRA, N_REGIONAL
-```
-
-Las variables de nivel 2 nunca superan a `N_MUESTRA`; cada notebook las acota con `min(...)`.
-
----
-
-## Referencia de funciones del módulo `src`
-
-Todas las funciones se importan desde `src`:
-
-```python
-from src.data import build_base_dataframe
-from src.preprocessing import preprocess
-from src.features import extract_all_features
-from src.visualization import set_publication_style
-```
-
----
-
-### `src.data` — Carga de datos
-
-| Función / Constante | Descripción | Retorna |
-|---|---|---|
-| `LABEL_MAP` | `{'health': 0, 'sick': 1, 'tb': 2}` | `dict` |
-| `PALETTE_ACADEMIC` | Colores por clase para visualización | `dict` |
-| `VALID_EXTS` | Extensiones de imagen aceptadas | `tuple` |
-| `setup_kaggle_credentials(kaggle_json=None)` | Configura `~/.kaggle/kaggle.json`. Detecta Google Colab automáticamente. | `None` |
-| `download_dataset()` | Descarga TBX11K via `kagglehub`. Usa caché local si ya fue descargado. | `str` — ruta de descarga |
-| `get_data_root(download_path)` | Verifica y retorna la ruta al directorio `TBX11K/`. | `str` |
-| `map_dataset_structure(data_root)` | Mapea `imgs/` y cuenta imágenes por carpeta/subcarpeta. | `pd.DataFrame` — columnas `carpeta`, `subcarpeta`, `imagenes` |
-| `build_base_dataframe(data_root)` | Carga el subconjunto etiquetado y construye el DataFrame base con metadatos por imagen. | `pd.DataFrame` — columnas `image_path`, `class_name`, `label`, `ancho`, `alto`, `modo` |
-
-**Ejemplo:**
-
-```python
-from src.data import build_base_dataframe, LABEL_MAP
-from pathlib import Path
-
-DATA_ROOT = r"C:\ruta\al\proyecto\data\TBX11K"
-df_base   = build_base_dataframe(DATA_ROOT)
-
-# Cargar desde CSV si ya fue generado
-df_base = pd.read_csv(Path('..') / 'data' / 'df_base.csv')
-```
-
----
-
-### `src.preprocessing` — Preprocesamiento
-
-Pipeline: `imagen original → escala de grises → resize 256×256 → Bilateral Filter → CLAHE`
-
-| Función / Constante | Descripción | Retorna |
-|---|---|---|
-| `IMG_SIZE` | Tamaño objetivo `(256, 256)` | `tuple` |
-| `BF_D` | Diámetro del vecindario del Bilateral Filter (`9`) | `int` |
-| `BF_SIGMA_COLOR` | Sigma de color del Bilateral Filter (`80.0`) | `float` |
-| `BF_SIGMA_SPACE` | Sigma espacial del Bilateral Filter (`80.0`) | `float` |
-| `CLAHE_CLIP_LIMIT` | Límite de recorte del histograma CLAHE (`40.0`) | `float` |
-| `CLAHE_TILE_GRID` | Tamaño de la cuadrícula CLAHE `(8, 8)` | `tuple` |
-| `load_grayscale(path)` | Carga la imagen en escala de grises. | `np.ndarray` o `None` |
-| `resize_image(img, size=IMG_SIZE)` | Redimensiona con interpolación de área (`INTER_AREA`). | `np.ndarray` |
-| `apply_bilateral_filter(img, ...)` | Aplica el Filtro Bilateral preservando bordes. | `np.ndarray` |
-| `apply_clahe(img, ...)` | Aplica CLAHE para realce de contraste local. | `np.ndarray` |
-| `preprocess(path)` | **Pipeline completo.** Ejecuta los cuatro pasos sobre una imagen. | `np.ndarray` o `None` |
-| `preprocess_steps(path)` | Ejecuta el pipeline y retorna cada estado intermedio. | `dict` con claves `'original'`, `'bilateral'`, `'clahe'` |
-
-**Ejemplo:**
-
-```python
-from src.preprocessing import preprocess, preprocess_steps
-
-img   = preprocess('ruta/imagen.png')        # np.ndarray (256, 256)
-pasos = preprocess_steps('ruta/imagen.png')
-img_original  = pasos['original']
-img_bilateral = pasos['bilateral']
-img_clahe     = pasos['clahe']
-```
-
----
-
-### `src.features` — Extracción de características
-
-| Función / Constante | Descripción | Retorna |
-|---|---|---|
-| `REGIONS` | Definición de las 6 regiones espaciales (rectángulos) `{nombre: (x, y, w, h)}` | `dict` |
-| `GLCM_PROPS` | Propiedades GLCM calculadas | `list` |
-| `LBP_P` | Puntos de muestreo LBP (`24`) | `int` |
-| `LBP_R` | Radio LBP (`3.0`) | `float` |
-| `LBP_BINS` | Bins del histograma LBP (`26`) | `int` |
-| `HOG_PIXELS_PER_CELL` | Tamaño de celda HOG `(32, 32)` | `tuple` |
-| `feat_intensity_global(img)` | Calcula `mean`, `std`, `contrast`, `entropy` sobre la imagen completa. | `dict` — 4 entradas |
-| `feat_intensity_regional(img)` | Calcula las 4 métricas en cada una de las 6 regiones espaciales (rectángulos). | `dict` — 24 entradas |
-| `feat_glcm(img)` | GLCM a 4 ángulos, 64 niveles, 5 propiedades × (mean + std). | `dict` — 10 entradas |
-| `feat_lbp(img)` | Histograma LBP uniform normalizado (P=24, R=3). | `dict` — 26 entradas |
-| `feat_hog(img)` | HOG con celdas 32×32, bloques 2×2, normalización L2-Hys. | `dict` — 1764 entradas |
-| `feat_gabor(img)` | Banco de 16 filtros Gabor (4 frecuencias × 4 ángulos), mean + std por filtro. | `dict` — 32 entradas |
-| `feat_phog(img)` | Pyramid HOG en 2 niveles: imagen completa (nivel 0) + 4 cuadrantes (nivel 1). | `dict` — 1440 entradas |
-| `extract_features(image_path, label, class_name)` | Pipeline completo para una sola imagen. | `dict` — 3300 + 3 entradas, o `None` |
-| `extract_all_features(df_base, sample, sample_size, random_state)` | Extracción masiva sobre el DataFrame base con barra de progreso `tqdm`. | `(pd.DataFrame, list[str])` — features y errores |
-| `verify_extractors(df_base)` | Verifica la dimensionalidad de cada extractor con `assert`. | `None` |
-| `get_feature_groups(features_df)` | Clasifica columnas por grupo de extractor. | `dict` |
-| `print_feature_summary(features_df)` | Imprime recuento, distribución de clases, nulos e infinitos. | `None` |
-
-**Dimensionalidad del vector de características:**
-
-| Grupo | Features |
-|---|:---:|
-| Intensidad global | 4 |
-| Intensidad regional (6 zonas × 4 métricas) | 24 |
-| GLCM (5 propiedades × 2 estadísticos) | 10 |
-| LBP (P=24, uniform) | 26 |
-| HOG (celdas 32×32, bloques 2×2, 9 orientaciones) | 1764 |
-| Gabor (4 frecuencias × 4 ángulos, mean + std) | 32 |
-| PHOG (nivel 0 global + nivel 1 cuadrantes) | 1440 |
-| **Total** | **3300** |
-
-**Ejemplo:**
-
-```python
-from src.features import extract_all_features, verify_extractors
-
-verify_extractors(df_base)
-
-# Extracción completa (recomendada): usa todas las imágenes de df_base
-features_df, errores = extract_all_features(df_base, sample=False)
-features_df.to_csv('../data/features_tbx11k.csv', index=False)
-
-# Modo desarrollo: submuestreo de N imágenes por clase (más rápido)
-features_df, errores = extract_all_features(df_base, sample=True, sample_size=800)
-```
-
----
-
-### `src.visualization` — Visualización
-
-Todas las figuras usan estilo de publicación científica (`seaborn-v0_8-whitegrid`, DPI 150 en pantalla, 300 para guardar). Cada función incluye una línea comentada para guardar:
-
-```python
-# fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
-```
-
-Las funciones con muestras ajustan automáticamente el tamaño si hay menos imágenes disponibles que `n` solicitado.
-
-| Función | Notebook | Descripción |
-|---|:---:|---|
-| `set_publication_style()` | todos | Configura `rcParams` globales de Matplotlib para estilo de artículo. |
-| `plot_dataset_distribution(resumen_df, df_base, save_path)` | 01 | Panel de barras: dataset completo y subconjunto etiquetado. Leyendas debajo de las barras. |
-| `plot_image_metadata(df_base, save_path)` | 01 | Distribución de modos de color y resoluciones más frecuentes. |
-| `plot_sample_images(df_base, n, random_state, save_path)` | 02 | Cuadrícula de `n` imágenes por clase sin preprocesar. |
-| `plot_intensity_histograms(df_base, n_hist, preprocessed, random_state, save_path)` | 02 / 03 | Histograma de intensidad promedio por clase. `preprocessed=True` aplica el pipeline. |
-| `compute_intensity_stats(df_base, n_hist, random_state)` | 02 | Calcula `mean`, `std`, `contrast`, `entropy` por imagen. Retorna `pd.DataFrame`. |
-| `plot_intensity_metrics(stats_df, title_suffix, save_path)` | 02 / 03 | Panel 2×2 de violin + box + strip para las 4 métricas de intensidad. |
-| `plot_preprocessing_steps(df_base, save_path)` | 03 | Cuadrícula 3×3: original / BF / BF+CLAHE por clase. |
-| `plot_histogram_comparison(df_base, class_name, save_path)` | 03 | Histogramas antes y después del preprocesamiento para una clase. |
-| `build_preprocessing_stats_table(df_base, n_sample, random_state)` | 03 | Tabla `(Class, Stage)` con métricas promedio antes y después del preprocesamiento. |
-| `plot_regions_on_images(df_base, save_path)` | 04 | Bordes de las 6 regiones espaciales (rectángulos) sobre imágenes preprocesadas. |
-| `compute_regional_stats(df_base, n_reg, random_state)` | 04 | Intensidad media por región para una muestra por clase. Retorna `pd.DataFrame`. |
-| `plot_regional_heatmap(reg_df, save_path)` | 04 | Mapa de calor de intensidad media por región y clase. |
-| `plot_regional_distributions(reg_df, save_path)` | 04 | Panel 2×3 con eje Y compartido (`sharey=True`) para comparación directa entre regiones. |
-| `build_regional_comparison_table(reg_df)` | 04 | Tabla `mean ± std` por región y clase, lista para publicación. |
-| `plot_glcm_distributions(features_df, save_path)` | 05 | Panel 1×5 con distribución de las 5 propiedades GLCM por clase en su escala original. |
-| `plot_lbp_histograms(features_df, save_path)` | 05 | Histograma LBP promedio por clase. Leyenda y título fuera del área del gráfico. |
-| `plot_feature_summary_table(features_df)` | 05 | Tabla de recuento de features por grupo. Retorna `pd.DataFrame`. |
-
-**Paleta académica:**
-
-| Clase | Color | Hex |
-|---|---|---|
-| `health` | Azul oscuro | `#2166AC` |
-| `sick` | Verde oscuro | `#4DAC26` |
-| `tb` | Rojo burdeos | `#B2182B` |
-
----
-
-## Pipeline completo — uso programático
-
-```python
-import sys
-sys.path.insert(0, '..')   # apuntar a la raíz del proyecto
-
-import pandas as pd
-from pathlib import Path
-from src.data import build_base_dataframe, LABEL_MAP
-from src.features import verify_extractors, extract_all_features
-from src.visualization import set_publication_style, plot_regional_heatmap, compute_regional_stats
-
-# 1. Cargar datos
-DATA_ROOT = r"C:\ruta\al\proyecto\data\TBX11K"
-df_base   = build_base_dataframe(DATA_ROOT)
-df_base.to_csv('../data/df_base.csv', index=False)
-
-# 2. Verificar extractores
-verify_extractors(df_base)
-
-# 3. Extraer características
-features_df, errores = extract_all_features(df_base, sample=False)
-features_df.to_csv('../data/features_tbx11k.csv', index=False)
-
-# 4. Visualizar
-set_publication_style()
-reg_df = compute_regional_stats(df_base, n_reg=200)
-plot_regional_heatmap(reg_df)
-```
-
----
-
-## Pipeline de análisis
-
-```text
-TBX11K (data/TBX11K/)
-   │
-   ▼
-01. Carga y construcción de metadata  →  data/df_base.csv
-   │
-   ▼
-02. Análisis exploratorio (imágenes crudas)
-   │
-   ▼
-03. Preprocesamiento
-   │   ├── Bilateral Filter
-   │   └── CLAHE
-   │
-   ▼
-04. Análisis regional (6 zonas espaciales (rectángulos))
-   │
-   ▼
-05. Extracción de características      →  data/features_tbx11k.csv
-   │   ├── GLCM
-   │   ├── LBP
-   │   ├── HOG
-   │   ├── Gabor
-   │   ├── PHOG
-   │   ├── Intensidad global
-   │   └── Intensidad regional
-   │
-   ▼
-[Siguiente etapa] Modelado ML
-```
-
----
-
-## Próximas etapas
-
-```text
-Extracción de características
-          │
-          ▼
-Análisis de características (correlación, importancia)
-          │
-          ▼
-Reducción de dimensionalidad (PCA, selección de features)
-          │
-          ▼
-Clustering / análisis de estructura
-          │
-          ▼
-Modelos de Machine Learning
-          │
-          ▼
-Evaluación del desempeño (ROC, AUC, F1 por clase)
-```
-
----
-
-## Referencias
-
-- **TB_detection** — [github.com/Krishni1307/TB_detection](https://github.com/Krishni1307/TB_detection): referencia para la estrategia de construcción del DataFrame base.
-- **tbx11k-ensemble** — [github.com/behera116/tbx11k-ensemble](https://github.com/behera116/tbx11k-ensemble): referencia para la configuración del Bilateral Filter y CLAHE.
-- **Haralick et al. (1973):** Textural features for image classification. *IEEE Transactions on Systems, Man, and Cybernetics*.
-- **Ojala et al. (2002):** Multiresolution gray-scale and rotation invariant texture classification with LBP. *IEEE TPAMI*.
-- **Dalal & Triggs (2005):** Histograms of oriented gradients for human detection. *CVPR*.
-- **Zuiderveld (1994):** Contrast Limited Adaptive Histogram Equalization. *Graphics Gems IV*.
-- **Tomasi & Manduchi (1998):** Bilateral filtering for gray and color images. *ICCV*.
+- **No presentar** el modelo de 0.93 como detección de TB: es un clasificador
+  de fuente/adquisición.
+- **Modelo descontaminado**: SVM sobre textura estricta residualizada
+  (`models/v2_svm_strict_resid_context.joblib`), BalAcc 0.735, AP 0.366,
+  AUC 0.805. Es la referencia honesta del proyecto.
+- **Modelo de contexto**: útil como **detector de dominio/fuente** para
+  marcar imágenes fuera de distribución, no para diagnosticar.
+- **Para mejorar sin atajo**: dataset externo con adquisición balanceada,
+  segmentación con modelo preentrenado, o adaptación de dominio/DL. Con
+  TBX11K solo, el techo honesto es ~0.74.
+- El CAD debe ser **apoyo al triaje**, no diagnóstico, con probabilidades
+  calibradas y umbral fijado por sensibilidad objetivo.

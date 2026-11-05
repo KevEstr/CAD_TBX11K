@@ -98,6 +98,17 @@ CONTEXT_THUMB = (16, 16)
 SHAPE_THUMB = (8, 8)
 
 META_COLS = {"image_path", "class_name", "label"}
+QUALITY_COLS = {
+    "mask_area_fraction",
+    "mask_lr_balance",
+    "mask_contrast",
+    "mask_fallback",
+}
+
+
+def model_feature_columns(features_df: pd.DataFrame) -> list[str]:
+    """Columnas usadas por el modelo (excluye metadatos y calidad de máscara)."""
+    return [c for c in features_df.columns if c not in META_COLS | QUALITY_COLS]
 
 
 # ---------------------------------------------------------------------------
@@ -407,9 +418,10 @@ def extract_features(
 ) -> Optional[dict]:
     """Extrae todas las familias de características para una imagen.
 
-    La vista principal es el recorte torácico; la textura usa la máscara
-    pulmonar como soporte. El contexto se extrae de la imagen completa con la
-    máscara de fondo.
+    La textura usa la máscara pulmonar como soporte. HOG se calcula sobre la
+    vista ``lung`` (exterior relleno con la mediana pulmonar) para no introducir
+    bordes del fondo ni la geometría del recorte. El contexto se extrae de la
+    imagen completa con la máscara de fondo.
     """
     bundle = preprocess_bundle(image_path)
     if bundle is None:
@@ -424,10 +436,11 @@ def extract_features(
     row.update(feat_glcm(img, mask))
     row.update(feat_lbp(img, mask))
     row.update(feat_gabor(img, mask))
+    lung_img = bundle["lung"][0]
     if include_hog:
-        row.update(feat_hog(img))
+        row.update(feat_hog(lung_img))
     if include_phog:
-        row.update(feat_phog(img))
+        row.update(feat_phog(lung_img))
     if include_shape:
         row.update(feat_shape(mask))
 
@@ -441,38 +454,6 @@ def extract_features(
     if include_context:
         ctx_img, ctx_mask = bundle["context"]
         row.update(feat_context(ctx_img, ctx_mask))
-    return row
-
-
-def extract_strict_features(image_path: str, label: int, class_name: str,
-                            include_shape: bool = True) -> Optional[dict]:
-    """Extrae textura sobre las vistas ``strict`` y ``strict_harmonized``.
-
-    Se usa para comprobar si la señal de textura sobrevive al eliminar la
-    pared torácica, los hombros, el abdomen y las esquinas. Las columnas se
-    prefijan con ``strict_`` y ``stricth_`` para no colisionar con la matriz
-    principal.
-    """
-    bundle = preprocess_bundle(image_path)
-    if bundle is None:
-        return None
-
-    row: dict = {"image_path": image_path, "class_name": class_name, "label": label}
-    for mode, prefix in [("strict", "strict_"), ("strict_harmonized", "stricth_")]:
-        img, mask = bundle[mode]
-        for k, v in feat_intensity_global(img, mask).items():
-            row[f"{prefix}{k}"] = v
-        for k, v in feat_intensity_regional(img, mask).items():
-            row[f"{prefix}{k}"] = v
-        for k, v in feat_glcm(img, mask).items():
-            row[f"{prefix}{k}"] = v
-        for k, v in feat_lbp(img, mask).items():
-            row[f"{prefix}{k}"] = v
-        for k, v in feat_gabor(img, mask).items():
-            row[f"{prefix}{k}"] = v
-        if include_shape:
-            for k, v in feat_shape(mask).items():
-                row[f"{prefix}{k}"] = v
     return row
 
 

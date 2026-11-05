@@ -1,9 +1,9 @@
 """Valida la segmentación pulmonar contra las cajas de lesión de TBX11K.
 
 Genera:
-    data/seg_validation_v2.csv          (una fila por imagen TB con cajas)
-    data/seg_quality_v2.csv             (muestra estratificada por clase)
-    data/seg_summary_v2.json
+    data/seg_validation.csv          (una fila por imagen TB con cajas)
+    data/seg_quality.csv             (muestra estratificada por clase)
+    data/seg_summary.json
     reports/03_segmentacion_ejemplos.png
     reports/03_segmentacion_lesiones.png
     reports/03_segmentacion_comparacion.png
@@ -147,7 +147,7 @@ def main() -> None:
             "cov_obsolete": cat_new.get(2, np.nan),
         })
     df = pd.DataFrame(rows)
-    df.to_csv(ROOT / "data" / "seg_validation_v2.csv", index=False)
+    df.to_csv(ROOT / "data" / "seg_validation.csv", index=False)
 
     # Calidad en una muestra estratificada (300 por clase).
     qrows = []
@@ -166,7 +166,7 @@ def main() -> None:
                 "fallback": int(q.fallback),
             })
     qdf = pd.DataFrame(qrows)
-    qdf.to_csv(ROOT / "data" / "seg_quality_v2.csv", index=False)
+    qdf.to_csv(ROOT / "data" / "seg_quality.csv", index=False)
 
     summary = {
         "n_tb": int(len(df)),
@@ -193,7 +193,7 @@ def main() -> None:
             contrast=("contrast", "mean"), fallback=("fallback", "mean"),
         ).round(3).to_dict(orient="index"),
     }
-    (ROOT / "data" / "seg_summary_v2.json").write_text(
+    (ROOT / "data" / "seg_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))

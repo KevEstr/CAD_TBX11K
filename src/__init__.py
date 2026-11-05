@@ -70,6 +70,7 @@ from .features import (
     extract_all_features,
     verify_extractors,
     get_feature_groups,
+    model_feature_columns,
     print_feature_summary,
 )
 

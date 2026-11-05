@@ -40,6 +40,7 @@ Referencias
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional, Tuple
 
 import cv2
@@ -78,12 +79,64 @@ MODES = ("thorax", "lung", "context", "full", "mask", "strict", "strict_harmoniz
 # Pasos individuales
 # ---------------------------------------------------------------------------
 
+def _to_uint8(img: np.ndarray) -> np.ndarray:
+    """Convierte cualquier imagen numérica a uint8 normalizando percentiles."""
+    if img.dtype == np.uint8:
+        return img
+    arr = img.astype(np.float32)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+    lo, hi = np.percentile(arr, [0.5, 99.5])
+    if hi <= lo:
+        lo, hi = float(arr.min()), float(arr.max())
+    if hi <= lo:
+        return np.zeros(arr.shape, dtype=np.uint8)
+    arr = np.clip((arr - lo) / (hi - lo) * 255.0, 0, 255)
+    return arr.astype(np.uint8)
+
+
 def load_grayscale(path: str) -> Optional[np.ndarray]:
-    """Carga una imagen en escala de grises (uint8) o ``None`` si falla."""
-    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    """Carga PNG/JPG/TIF/DICOM como uint8 en escala de grises.
+
+    Soporta imágenes de 8/16 bits y DICOM si ``pydicom`` está instalado.
+    Normaliza el rango dinámico para que el CAD no dependa de la profundidad
+    de bits del equipo de origen.
+    """
+    suffix = Path(path).suffix.lower()
+    if suffix in (".dcm", ".dicom"):
+        try:
+            import pydicom
+        except ImportError:
+            print("[ERROR] pydicom no está instalado; no se puede leer DICOM.")
+            return None
+        try:
+            ds = pydicom.dcmread(path)
+            arr = ds.pixel_array.astype(np.float32)
+            arr = arr * float(getattr(ds, "RescaleSlope", 1))
+            arr = arr + float(getattr(ds, "RescaleIntercept", 0))
+            if getattr(ds, "PhotometricInterpretation", "") == "MONOCHROME1":
+                arr = arr.max() - arr
+            return _to_uint8(arr)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ERROR] No se pudo leer DICOM {path}: {exc}")
+            return None
+
+    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     if img is None:
-        print(f"[ERROR] No se pudo leer la imagen: {path}")
-    return img
+        try:
+            from PIL import Image
+
+            with Image.open(path) as pil:
+                img = np.asarray(pil.convert("L"))
+        except Exception:  # noqa: BLE001
+            print(f"[ERROR] No se pudo leer la imagen: {path}")
+            return None
+
+    if img.ndim == 3:
+        if img.shape[2] == 4:
+            img = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+        else:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return _to_uint8(img)
 
 
 def resize_image(img: np.ndarray, size: Tuple[int, int] = IMG_SIZE) -> np.ndarray:
@@ -148,7 +201,7 @@ def preprocess_with_mask(
         raise ValueError(f"Modo de preprocesamiento desconocido: {modo}")
 
     if modo in ("strict", "strict_harmonized"):
-        bundle = preprocess_bundle(path)
+        bundle = preprocess_bundle(path, include_strict=True)
         if bundle is None:
             return None
         img, mask = bundle[modo]
@@ -213,15 +266,17 @@ def preprocess(path: str, modo: str = "thorax") -> Optional[np.ndarray]:
     return img
 
 
-def preprocess_bundle(path: str) -> Optional[dict]:
+def preprocess_bundle(path: str, include_strict: bool = False) -> Optional[dict]:
     """Segmenta una vez y devuelve las vistas ``thorax`` y ``context``.
 
-    Evita repetir la segmentación cuando se extraen las características
-    pulmonares y el control de fondo en la misma pasada.
+    La vista estricta es opcional porque no se usa en el modelo principal y
+    añade coste de morfología por imagen.
 
     Retorna
     -------
-    dict con claves ``'thorax'``, ``'context'``, ``'quality'`` y ``'bbox'``.
+    dict con claves ``'thorax'``, ``'lung'``, ``'context'``, ``'quality'`` y
+    ``'bbox'``; además ``'strict'`` y ``'strict_harmonized'`` si
+    ``include_strict=True``.
     """
     img = load_grayscale(path)
     if img is None:
@@ -243,52 +298,64 @@ def preprocess_bundle(path: str) -> Optional[dict]:
     ).astype(bool)
     thorax = apply_clahe(apply_bilateral_filter(thorax))
 
+    # Vista pulmonar: exterior de la máscara relleno con la mediana pulmonar.
+    # Elimina bordes del fondo y de la caja torácica sin recortar lesiones.
+    if mask_thorax.any() and (~mask_thorax).any():
+        med = int(np.median(thorax[mask_thorax]))
+        lung = np.where(mask_thorax, thorax, med).astype(np.uint8)
+    else:
+        lung = thorax.copy()
+
     # Vista de contexto: imagen completa y máscara de fondo.
     context = apply_clahe(apply_bilateral_filter(resize_image(img512)))
     mask_context = cv2.resize(
         (~mask512).astype(np.uint8), IMG_SIZE, interpolation=cv2.INTER_NEAREST
     ).astype(bool)
 
-    # Vista estricta: máscara erosionada, recorte ajustado y exterior relleno
-    # con la mediana pulmonar. Elimina hombros, abdomen y esquinas.
-    strict512 = strict_lung_mask(mask512)
-    strict_bbox = thorax_bbox(
-        strict512, margin_frac=0.01, min_width_frac=0.55, min_height_frac=0.55
-    )
-    if strict_bbox is None:
-        strict_bbox = bbox
-    sx0, sy0, sx1, sy1 = strict_bbox
-    scrop = img512[sy0:sy1, sx0:sx1]
-    smask_crop = strict512[sy0:sy1, sx0:sx1]
-    strict = cv2.resize(scrop, IMG_SIZE, interpolation=cv2.INTER_AREA)
-    mask_strict = cv2.resize(
-        smask_crop.astype(np.uint8), IMG_SIZE, interpolation=cv2.INTER_NEAREST
-    ).astype(bool)
-    strict = apply_clahe(apply_bilateral_filter(strict))
-    if mask_strict.any() and (~mask_strict).any():
-        med = int(np.median(strict[mask_strict]))
-        strict = np.where(mask_strict, strict, med).astype(np.uint8)
-
-    # Vista estricta armonizada: normalización por percentiles dentro del
-    # pulmón, sin CLAHE, para reducir diferencias de adquisición.
-    harm = strict.copy()
-    if mask_strict.any():
-        vals = harm[mask_strict]
-        lo, hi = np.percentile(vals, 2), np.percentile(vals, 98)
-        if hi > lo:
-            harm = np.clip((harm.astype(float) - lo) / (hi - lo) * 255.0, 0, 255)
-            harm = harm.astype(np.uint8)
-        med = int(np.median(harm[mask_strict]))
-        harm = np.where(mask_strict, harm, med).astype(np.uint8)
-
-    return {
+    bundle = {
         "thorax": (thorax, mask_thorax),
+        "lung": (lung, mask_thorax),
         "context": (context, mask_context),
-        "strict": (strict, mask_strict),
-        "strict_harmonized": (harm, mask_strict),
         "quality": quality,
         "bbox": bbox,
     }
+
+    if include_strict:
+        # Vista estricta: máscara erosionada, recorte ajustado y exterior
+        # relleno con la mediana pulmonar.
+        strict512 = strict_lung_mask(mask512)
+        strict_bbox = thorax_bbox(
+            strict512, margin_frac=0.01, min_width_frac=0.55, min_height_frac=0.55
+        )
+        if strict_bbox is None:
+            strict_bbox = bbox
+        sx0, sy0, sx1, sy1 = strict_bbox
+        scrop = img512[sy0:sy1, sx0:sx1]
+        smask_crop = strict512[sy0:sy1, sx0:sx1]
+        strict = cv2.resize(scrop, IMG_SIZE, interpolation=cv2.INTER_AREA)
+        mask_strict = cv2.resize(
+            smask_crop.astype(np.uint8), IMG_SIZE, interpolation=cv2.INTER_NEAREST
+        ).astype(bool)
+        strict = apply_clahe(apply_bilateral_filter(strict))
+        if mask_strict.any() and (~mask_strict).any():
+            med = int(np.median(strict[mask_strict]))
+            strict = np.where(mask_strict, strict, med).astype(np.uint8)
+
+        # Vista estricta armonizada: normalización por percentiles.
+        harm = strict.copy()
+        if mask_strict.any():
+            vals = harm[mask_strict]
+            lo, hi = np.percentile(vals, 2), np.percentile(vals, 98)
+            if hi > lo:
+                harm = np.clip((harm.astype(float) - lo) / (hi - lo) * 255.0, 0, 255)
+                harm = harm.astype(np.uint8)
+            med = int(np.median(harm[mask_strict]))
+            harm = np.where(mask_strict, harm, med).astype(np.uint8)
+
+        bundle["strict"] = (strict, mask_strict)
+        bundle["strict_harmonized"] = (harm, mask_strict)
+
+    return bundle
 
 
 def preprocess_steps(path: str) -> Optional[dict[str, np.ndarray]]:

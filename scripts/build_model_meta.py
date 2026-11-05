@@ -3,8 +3,8 @@
 Orden del pipeline:
 
     01 → data/df_base.csv        (8.400 imágenes etiquetadas)
-    05 → data/df_model.csv       (8.256 tras deduplicación exacta)
-    06–10 → data/df_model.csv
+    este script → data/df_model.csv (8.256 tras deduplicación exacta)
+    05–10 → data/df_model.csv
 
 La lista canónica de 144 duplicados exactos está en
 `src/dedup_drop_names.csv` (todos de `sick`). Esa lista se obtuvo de la

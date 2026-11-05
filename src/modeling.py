@@ -1,27 +1,4 @@
-﻿"""
-cad_tbx11k.modeling
-====================
-Protocolo de modelado y evaluaciÃ³n del pipeline CAD-TBX11K.
-
-Principios de diseÃ±o:
-
-- La selecciÃ³n de caracterÃ­sticas se ajusta **dentro de cada fold**.
-- La comparaciÃ³n de familias (textura, HOG, forma, contexto) usa el mismo
-  protocolo y las mismas particiones.
-- El modelo principal es una regresiÃ³n logÃ­stica sobre textura pulmonar:
-  es interpretable, barata y produce probabilidades.
-- El umbral clÃ­nico se elige con un objetivo declarado (sensibilidad â‰¥ 0.90)
-  y, cuando se solicita, de forma anidada (dentro del fold de entrenamiento).
-- XGBoost y SVM se reportan como comparaciÃ³n, no como recomendaciÃ³n automÃ¡tica.
-
-Referencias
------------
-- Varma & Simon (2006). Bias in error estimation when using cross-validation
-  for model selection.
-- Cawley & Talbot (2010). On over-fitting in model selection.
-- McNemar (1947). Note on the sampling error of the difference between
-  correlated proportions.
-"""
+"""Utilidades de validación, umbrales y métricas para el modelado."""
 
 from __future__ import annotations
 
@@ -56,9 +33,7 @@ except Exception:  # pragma: no cover
     HAS_XGB = False
 
 
-# ---------------------------------------------------------------------------
 # Especificaciones
-# ---------------------------------------------------------------------------
 
 FEATURE_SETS: dict[str, list[str]] = {
     "texture": ["texture"],
@@ -71,7 +46,7 @@ FEATURE_SETS: dict[str, list[str]] = {
     "all": ["texture", "hog", "shape", "context"],
 }
 
-# k fijo por familia: la selecciÃ³n se hace dentro de cada fold.
+# k fijo por familia: la selección se hace dentro de cada fold.
 K_BY_SET: dict[str, int] = {
     "texture": 48,
     "hog": 120,
@@ -112,12 +87,10 @@ PARAM_GRIDS: dict[str, dict] = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Utilidades
-# ---------------------------------------------------------------------------
 
 def columns_for_set(df: pd.DataFrame, feature_set: str) -> list[str]:
-    """Devuelve las columnas de una familia lÃ³gica."""
+    """Devuelve las columnas de una familia lógica."""
     from .features import get_feature_groups
 
     groups = get_feature_groups(df)
@@ -135,16 +108,12 @@ def columns_for_set(df: pd.DataFrame, feature_set: str) -> list[str]:
 
 
 def _selector(n_features: int, k: int):
-    """Selector univariante determinista (ANOVA F) para todas las familias.
-
-    Se usa ``f_classif`` en lugar de información mutua porque es determinista,
-    no depende de un muestreo estocástico y es reproducible fold a fold.
-    """
+    """Selector univariante ANOVA F."""
     return SelectKBest(f_classif, k=min(k, n_features))
 
 
 def make_pipeline(model_name: str, n_features: int, k: int) -> Pipeline:
-    """Pipeline escalado + selecciÃ³n + clasificador."""
+    """Pipeline escalado + selección + clasificador."""
     if model_name == "dummy":
         clf = DummyClassifier(strategy="stratified", random_state=42)
     elif model_name == "lr":
@@ -155,7 +124,7 @@ def make_pipeline(model_name: str, n_features: int, k: int) -> Pipeline:
         clf = RandomForestClassifier(random_state=42, n_jobs=1)
     elif model_name == "xgb":
         if not HAS_XGB:
-            raise ImportError("xgboost no estÃ¡ instalado.")
+            raise ImportError("xgboost no está instalado.")
         clf = XGBClassifier(
             random_state=42, n_jobs=1, eval_metric="logloss",
             scale_pos_weight=9.32, tree_method="hist",
@@ -175,18 +144,7 @@ def get_param_grid(model_name: str) -> dict:
 
 
 class ContextResidualizer(BaseEstimator, TransformerMixin):
-    """Elimina de las features de textura la parte explicada por el contexto.
-
-    Las primeras ``n_texture`` columnas son textura; el resto son variables de
-    contexto/forma (nuisance). En ``fit`` se ajusta una regresión Ridge
-    multivariada contexto → textura **solo con el train del fold**. En
-    ``transform`` se devuelven los residuos de textura, de modo que el
-    clasificador no puede usar el contexto ni su componente lineal.
-
-    Esto convierte el control de sesgo en una corrección, no solo en una
-    comparación: si la textura conserva señal después de residualizar, esa
-    señal no es explicable por la fuente/adquisición.
-    """
+    """Elimina de la textura la parte explicada por contexto/forma."""
 
     def __init__(self, n_texture: int, alpha: float = 10.0,
                  keep_nuisance: bool = False):
@@ -212,12 +170,10 @@ class ContextResidualizer(BaseEstimator, TransformerMixin):
         return resid
 
 
-# ---------------------------------------------------------------------------
 # Métricas
-# ---------------------------------------------------------------------------
 
 def binary_metrics(y_true: np.ndarray, proba: np.ndarray, threshold: float = 0.5) -> dict:
-    """MÃ©tricas binarias para TB vs resto."""
+    """Métricas binarias para TB vs resto."""
     y_true = np.asarray(y_true).astype(int)
     yhat = (np.asarray(proba) >= threshold).astype(int)
     tn, fp, fn, tp = confusion_matrix(y_true, yhat, labels=[0, 1]).ravel()
@@ -241,12 +197,7 @@ def binary_metrics(y_true: np.ndarray, proba: np.ndarray, threshold: float = 0.5
 
 
 def threshold_for_sensitivity(y_true: np.ndarray, proba: np.ndarray, target: float = 0.90) -> float:
-    """Mayor umbral que mantiene la sensibilidad objetivo (maximiza especificidad).
-
-    Si se recorriera de menor a mayor, se devolvería el umbral más bajo (que
-    marca a todos como positivos). El umbral clínico útil es el **más alto**
-    que todavía alcanza la sensibilidad objetivo.
-    """
+    """Mayor umbral que mantiene la sensibilidad objetivo."""
     y_true = np.asarray(y_true).astype(int)
     proba = np.asarray(proba)
     thresholds = np.unique(np.round(proba, 6))[::-1]
@@ -281,13 +232,7 @@ def youden_threshold(y_true: np.ndarray, proba: np.ndarray) -> float:
 
 
 def prior_correction(proba: np.ndarray, prevalence: float) -> np.ndarray:
-    """Corrige probabilidades entrenadas con pesos balanceados a la prevalencia real.
-
-    Si el clasificador se entrenÃ³ con ``class_weight='balanced'``, su prior
-    efectivo es 0.5. Para llevarlo a la prevalencia ``Ï€``::
-
-        logit(p_cal) = logit(p_bal) + logit(Ï€) - logit(0.5)
-    """
+    """Corrige probabilidades balanceadas a la prevalencia real."""
     p = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
     logit = np.log(p / (1 - p))
     logit_cal = logit + np.log(prevalence / (1 - prevalence))
@@ -301,7 +246,7 @@ def bootstrap_ci(
     n_boot: int = 2000,
     random_state: int = 42,
 ) -> dict:
-    """IC 95 % estratificado por bootstrap para mÃ©tricas clave."""
+    """IC 95 % estratificado por bootstrap para métricas clave."""
     rng = np.random.default_rng(random_state)
     y_true = np.asarray(y_true).astype(int)
     proba = np.asarray(proba)
@@ -328,7 +273,7 @@ def mcnemar_holm(
     y_true: np.ndarray,
     predictions: dict[str, np.ndarray],
 ) -> pd.DataFrame:
-    """McNemar por pares con correcciÃ³n de Holm."""
+    """McNemar por pares con corrección de Holm."""
     names = list(predictions)
     rows = []
     for i in range(len(names)):
@@ -359,9 +304,7 @@ def mcnemar_holm(
     return out
 
 
-# ---------------------------------------------------------------------------
-# ValidaciÃ³n cruzada anidada
-# ---------------------------------------------------------------------------
+# Validación cruzada anidada
 
 @dataclass
 class CVResult:
@@ -382,15 +325,7 @@ def nested_cv(
     target_sensitivity: float = 0.90,
     random_state: int = 42,
 ) -> CVResult:
-    """CV anidada: selector + hiperparÃ¡metros dentro de cada fold externo.
-
-    Parameters
-    ----------
-    outer_splits : iterable de (train_idx, test_idx)
-    inner_splits : plantilla de StratifiedKFold o None
-    nested_threshold : si True, el umbral se elige en el fold interno y se
-        aplica al fold externo (estimaciÃ³n honesta del umbral clÃ­nico).
-    """
+    """CV anidada con selector e hiperparámetros dentro de cada fold."""
     X = np.asarray(X)
     y = np.asarray(y).astype(int)
     k = K_BY_SET[feature_set]

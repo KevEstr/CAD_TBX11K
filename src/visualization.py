@@ -1,21 +1,4 @@
-"""
-cad_tbx11k.visualization
-=========================
-Visualization module for the CAD-TBX11K pipeline.
-
-Provides publication-quality figures (journal style) for each stage of the
-analysis: dataset distribution, preprocessing comparison, exploratory analysis,
-regional analysis and feature validation.
-
-All figures use the ``seaborn-v0_8-whitegrid`` style with standardized font
-and resolution parameters to ensure visual consistency across the pipeline.
-
-References
-----------
-- matplotlib         : https://matplotlib.org/stable/api/index.html
-- seaborn            : https://seaborn.pydata.org/api.html
-- matplotlib rcParams: https://matplotlib.org/stable/api/matplotlib_configuration_api.html#matplotlib.rcParams
-"""
+"""Funciones de visualización para los notebooks del pipeline."""
 
 from pathlib import Path
 from typing import Optional
@@ -52,20 +35,11 @@ PALETTE_FULL = {
 
 
 # ---------------------------------------------------------------------------
-# Publication style
+# Estilo de publicación
 # ---------------------------------------------------------------------------
 
 def set_publication_style() -> None:
-    """
-    Sets global Matplotlib parameters for journal-quality figures
-    (fonts, sizes, grids, DPI).
-
-    Should be called at the beginning of each notebook.
-
-    References
-    ----------
-    - plt.rcParams: https://matplotlib.org/stable/api/matplotlib_configuration_api.html
-    """
+    """Configura el estilo global de las figuras."""
     plt.style.use("seaborn-v0_8-whitegrid")
     plt.rcParams.update(
         {
@@ -87,7 +61,7 @@ def set_publication_style() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Notebook 01 — Dataset distribution
+# Notebook 01 — Distribución del dataset
 # ---------------------------------------------------------------------------
 
 def plot_dataset_distribution(
@@ -95,23 +69,7 @@ def plot_dataset_distribution(
     df_base: pd.DataFrame,
     save_path: Optional[str] = None,
 ) -> None:
-    """
-    Two-panel bar chart showing image counts across the full TBX11K dataset
-    and the labeled subset only.
-
-    Parameters
-    ----------
-    resumen_df : pd.DataFrame
-        Summary DataFrame from :func:`~cad_tbx11k.data.map_dataset_structure`.
-    df_base : pd.DataFrame
-        Base DataFrame from :func:`~cad_tbx11k.data.build_base_dataframe`.
-    save_path : str, optional
-        If provided, saves the figure at 300 DPI to this path.
-
-    References
-    ----------
-    - matplotlib bar: https://matplotlib.org/stable/api/_as_gen/matplotlib.axes.Axes.bar.html
-    """
+    """Grafica la distribución de imágenes por clase."""
     set_publication_style()
 
     por_carpeta = resumen_df.groupby("carpeta")["imagenes"].sum().sort_values(ascending=False)
@@ -120,7 +78,7 @@ def plot_dataset_distribution(
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
-    # --- Left panel: full dataset ---
+    # --- Panel izquierdo: dataset completo ---
     bars = axes[0].bar(
         por_carpeta.index, por_carpeta.values,
         color=colores_barras, edgecolor="white", linewidth=0.6, width=0.6,
@@ -151,7 +109,7 @@ def plot_dataset_distribution(
         fontsize=8, frameon=True, framealpha=0.9, edgecolor="#cccccc",
     )
 
-    # --- Right panel: labeled subset ---
+    # --- Panel derecho: subconjunto etiquetado ---
     class_colors = [PALETTE_ACADEMIC[c] for c in counts.index]
     bars2 = axes[1].bar(
         counts.index, counts.values,
@@ -184,37 +142,27 @@ def plot_dataset_distribution(
 
     fig.suptitle("Image Distribution — TBX11K Dataset", fontsize=13, fontweight="bold", y=1.02)
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 
 def plot_image_metadata(df_base: pd.DataFrame, save_path: Optional[str] = None) -> None:
-    """
-    Displays the distribution of color modes and most frequent resolutions
-    in the labeled dataset.
-
-    Parameters
-    ----------
-    df_base : pd.DataFrame
-        Base DataFrame with columns ``ancho``, ``alto`` and ``modo``.
-    save_path : str, optional
-        If provided, saves the figure at 300 DPI.
-    """
+    """Muestra modos de color y resoluciones frecuentes."""
     set_publication_style()
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
-    # Color modes
+    # Modos de color
     modo_counts = df_base["modo"].value_counts()
     axes[0].bar(modo_counts.index, modo_counts.values, color="#2166AC", edgecolor="white", width=0.5)
     for i, (idx, val) in enumerate(modo_counts.items()):
         axes[0].text(i, val + modo_counts.max() * 0.02, str(val), ha="center", fontweight="bold")
-    axes[0].set_title("Color Modes", fontweight="bold")
+    axes[0].set_title("Modos de color", fontweight="bold")
     axes[0].set_ylabel("Number of Images")
     axes[0].set_xlabel("PIL Mode")
     axes[0].set_ylim(0, modo_counts.max() * 1.15)
 
-    # Most frequent resolutions
+    # Resoluciones más frecuentes
     res_df = (
         df_base.groupby(["ancho", "alto"]).size()
         .reset_index(name="count")
@@ -228,12 +176,12 @@ def plot_image_metadata(df_base: pd.DataFrame, save_path: Optional[str] = None) 
 
     fig.suptitle("Image Metadata — Labeled Dataset", fontweight="bold")
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 
 # ---------------------------------------------------------------------------
-# Notebook 02 — Exploratory analysis
+# Notebook 02 — Análisis exploratorio
 # ---------------------------------------------------------------------------
 
 def plot_sample_images(
@@ -242,21 +190,7 @@ def plot_sample_images(
     random_state: int = 42,
     save_path: Optional[str] = None,
 ) -> None:
-    """
-    Displays a grid of sample radiographs per class without preprocessing,
-    for a first visual inspection.
-
-    Parameters
-    ----------
-    df_base : pd.DataFrame
-        Base DataFrame with columns ``image_path`` and ``class_name``.
-    n : int
-        Number of images per class.
-    random_state : int
-        Random seed for reproducibility.
-    save_path : str, optional
-        If provided, saves the figure at 300 DPI.
-    """
+    """Muestra ejemplos de radiografías por clase."""
     set_publication_style()
 
     fig, axes = plt.subplots(3, n, figsize=(3.5 * n, 10))
@@ -274,11 +208,11 @@ def plot_sample_images(
                 )
 
     fig.suptitle(
-        "Sample Chest X-rays by Class — No Preprocessing",
+        "Radiografías de ejemplo por clase — sin preprocesamiento",
         fontsize=13, fontweight="bold", y=1.01,
     )
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 
@@ -289,27 +223,10 @@ def plot_intensity_histograms(
     random_state: int = 42,
     save_path: Optional[str] = None,
 ) -> None:
-    """
-    Plots the average intensity histogram per class.
-
-    Parameters
-    ----------
-    df_base : pd.DataFrame
-        Base DataFrame.
-    n_hist : int
-        Number of images per class used to average the histogram.
-        Automatically adjusted if the class has fewer images available.
-    preprocessed : bool
-        If ``True``, applies the preprocessing pipeline before computing
-        the histogram. If ``False``, uses raw images.
-    random_state : int
-        Random seed for reproducibility.
-    save_path : str, optional
-        If provided, saves the figure at 300 DPI.
-    """
+    """Histograma de intensidad promedio por clase."""
     set_publication_style()
 
-    state = "Preprocessed (BF + CLAHE)" if preprocessed else "Raw (No Preprocessing)"
+    state = "Preprocesada (BF + CLAHE)" if preprocessed else "Original (sin preprocesamiento)"
     fig, ax = plt.subplots(figsize=(10, 4))
 
     n_used = n_hist
@@ -336,7 +253,7 @@ def plot_intensity_histograms(
         ax.fill_between(range(256), hist_acum, alpha=0.08, color=color)
 
     ax.set_title(
-        f"Average Intensity Histogram by Class — {state} (n={n_used} per class)",
+        f"Histograma de intensidad promedio por clase — {state} (n={n_used} por clase)",
         fontweight="bold",
     )
     ax.set_xlabel("Gray Level (0 = black, 255 = white)")
@@ -345,7 +262,7 @@ def plot_intensity_histograms(
               bbox_to_anchor=(0.5, 1.0), ncol=3, fontsize=9)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 def compute_intensity_stats(
@@ -353,29 +270,7 @@ def compute_intensity_stats(
     n_hist: int = 80,
     random_state: int = 42,
 ) -> pd.DataFrame:
-    """
-    Computes four intensity metrics (``mean``, ``std``, ``contrast``,
-    ``entropy``) over a sample of images per class.
-
-    Automatically adjusts the sample size if a class has fewer images
-    than ``n_hist``.
-
-    Parameters
-    ----------
-    df_base : pd.DataFrame
-        Base DataFrame.
-    n_hist : int
-        Maximum number of images per class. Automatically reduced if
-        fewer images are available.
-    random_state : int
-        Random seed for reproducibility.
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with columns ``class_name``, ``mean``, ``std``,
-        ``contrast`` and ``entropy``.
-    """
+    """Calcula métricas de intensidad por clase."""
     stats: list[dict] = []
 
     for class_name in ["health", "sick", "tb"]:
@@ -401,22 +296,10 @@ def compute_intensity_stats(
 
 def plot_intensity_metrics(
     stats_df: pd.DataFrame,
-    title_suffix: str = "Raw Images",
+    title_suffix: str = "Imágenes originales",
     save_path: Optional[str] = None,
 ) -> None:
-    """
-    Generates a 2×2 panel of violin + box + strip plots for the four
-    intensity metrics.
-
-    Parameters
-    ----------
-    stats_df : pd.DataFrame
-        DataFrame from :func:`compute_intensity_stats`.
-    title_suffix : str
-        Descriptive label for the preprocessing state shown in the title.
-    save_path : str, optional
-        If provided, saves the figure at 300 DPI.
-    """
+    """Panel de violín, caja y puntos para las métricas de intensidad."""
     set_publication_style()
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 9))
@@ -425,7 +308,7 @@ def plot_intensity_metrics(
     labels = {
         "mean":     "Mean Intensity (0–255)",
         "std":      "Intensity Standard Deviation",
-        "contrast": "Contrast (max − min)",
+        "contrast": "Contraste (máx − mín)",
         "entropy":  "Histogram Entropy (nats)",
     }
 
@@ -440,32 +323,22 @@ def plot_intensity_metrics(
         fontsize=13, fontweight="bold", y=1.01,
     )
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 
 # ---------------------------------------------------------------------------
-# Notebook 03 — Preprocessing
+# Notebook 03 — Preprocesamiento
 # ---------------------------------------------------------------------------
 
 def plot_preprocessing_steps(
     df_base: pd.DataFrame,
     save_path: Optional[str] = None,
 ) -> None:
-    """
-    Visualizes the effect of each preprocessing step on one representative
-    image per class (Original → Bilateral Filter → BF + CLAHE).
-
-    Parameters
-    ----------
-    df_base : pd.DataFrame
-        Base DataFrame.
-    save_path : str, optional
-        If provided, saves the figure at 300 DPI.
-    """
+    """Muestra los pasos de preprocesamiento por clase."""
     set_publication_style()
 
-    col_titles = ["Original (Resized)", "Bilateral Filter", "BF + CLAHE"]
+    col_titles = ["Original (redimensionada)", "Filtro bilateral", "BF + CLAHE"]
     fig, axes = plt.subplots(3, 3, figsize=(11, 11))
 
     for row, class_name in enumerate(["health", "sick", "tb"]):
@@ -491,7 +364,7 @@ def plot_preprocessing_steps(
         fontsize=13, fontweight="bold",
     )
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 
@@ -500,19 +373,7 @@ def plot_histogram_comparison(
     class_name: str = "tb",
     save_path: Optional[str] = None,
 ) -> None:
-    """
-    Compares intensity histograms before and after the full preprocessing
-    pipeline for one representative image.
-
-    Parameters
-    ----------
-    df_base : pd.DataFrame
-        Base DataFrame.
-    class_name : str
-        Reference class (``'health'``, ``'sick'`` or ``'tb'``).
-    save_path : str, optional
-        If provided, saves the figure at 300 DPI.
-    """
+    """Compara histogramas antes y después del preprocesamiento."""
     set_publication_style()
 
     path = df_base[df_base["class_name"] == class_name].iloc[0]["image_path"]
@@ -528,7 +389,7 @@ def plot_histogram_comparison(
     for ax, img, title in zip(
         axes,
         [original, processed],
-        ["Original (256×256 Resize)", "Preprocessed (BF + CLAHE)"],
+        ["Original (256×256)", "Preprocesada (BF + CLAHE)"],
     ):
         h = cv2.calcHist([img], [0], None, [256], [0, 256]).flatten()
         ax.plot(h / h.sum(), color="#1565C0", linewidth=1.6)
@@ -543,7 +404,7 @@ def plot_histogram_comparison(
         fontweight="bold",
     )
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 
@@ -552,31 +413,13 @@ def build_preprocessing_stats_table(
     n_sample: int = 60,
     random_state: int = 42,
 ) -> pd.DataFrame:
-    """
-    Builds a tracking table comparing intensity metrics before and after
-    preprocessing per class.
-
-    Parameters
-    ----------
-    df_base : pd.DataFrame
-        Base DataFrame.
-    n_sample : int
-        Number of images per class.
-    random_state : int
-        Random seed for reproducibility.
-
-    Returns
-    -------
-    pd.DataFrame
-        Table indexed by ``(Class, Stage)`` with columns ``mean``, ``std``,
-        ``contrast`` and ``entropy``.
-    """
+    """Tabla de métricas antes y después del preprocesamiento."""
     metrics = ["mean", "std", "contrast", "entropy"]
     rows: list[dict] = []
 
     for class_name in ["health", "sick", "tb"]:
         muestras = df_base[df_base["class_name"] == class_name].sample(n_sample, random_state=random_state)
-        for stage, use_prep in [("Original", False), ("Preprocessed", True)]:
+        for stage, use_prep in [("Original", False), ("Preprocesada", True)]:
             acum = {m: [] for m in metrics}
             for _, row in muestras.iterrows():
                 img = preprocess(row["image_path"]) if use_prep else cv2.imread(row["image_path"], cv2.IMREAD_GRAYSCALE)
@@ -602,24 +445,14 @@ def build_preprocessing_stats_table(
 
 
 # ---------------------------------------------------------------------------
-# Notebook 04 — Regional analysis
+# Notebook 04 — Análisis regional
 # ---------------------------------------------------------------------------
 
 def plot_regions_on_images(
     df_base: pd.DataFrame,
     save_path: Optional[str] = None,
 ) -> None:
-    """
-    Draws the borders of the six anatomical regions on preprocessed images
-    for each class.
-
-    Parameters
-    ----------
-    df_base : pd.DataFrame
-        Base DataFrame.
-    save_path : str, optional
-        If provided, saves the figure at 300 DPI.
-    """
+    """Dibuja las regiones anatómicas sobre imágenes preprocesadas."""
     set_publication_style()
 
     region_colors = [
@@ -646,11 +479,11 @@ def plot_regions_on_images(
         ax.axis("off")
 
     fig.suptitle(
-        "Anatomical Regions on Preprocessed Images (BF + CLAHE)",
+        "Regiones anatómicas sobre imágenes preprocesadas (BF + CLAHE)",
         fontsize=13, fontweight="bold",
     )
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 
@@ -659,25 +492,7 @@ def compute_regional_stats(
     n_reg: int = 60,
     random_state: int = 42,
 ) -> pd.DataFrame:
-    """
-    Computes the mean intensity per anatomical region for a sample of images
-    per class.
-
-    Parameters
-    ----------
-    df_base : pd.DataFrame
-        Base DataFrame.
-    n_reg : int
-        Number of images per class.
-    random_state : int
-        Random seed for reproducibility.
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with columns ``class_name`` and ``{REGION}_mean``
-        for each of the six regions.
-    """
+    """Calcula la intensidad media por región anatómica."""
     reg_stats: list[dict] = []
 
     for class_name in ["health", "sick", "tb"]:
@@ -698,16 +513,7 @@ def plot_regional_heatmap(
     reg_df: pd.DataFrame,
     save_path: Optional[str] = None,
 ) -> None:
-    """
-    Heatmap of mean intensity per anatomical region and class.
-
-    Parameters
-    ----------
-    reg_df : pd.DataFrame
-        DataFrame from :func:`compute_regional_stats`.
-    save_path : str, optional
-        If provided, saves the figure at 300 DPI.
-    """
+    """Mapa de calor de intensidad por región y clase."""
     set_publication_style()
 
     region_cols = [f"{r}_mean" for r in REGIONS]
@@ -727,12 +533,12 @@ def plot_regional_heatmap(
     ax.set_ylabel("Class")
     ax.set_xlabel("Region")
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 
 def plot_regional_distributions(reg_df: pd.DataFrame, save_path: Optional[str] = None) -> None:
-    """2×3 panel of violin + box + strip plots for each anatomical region with shared y-axis."""
+    """Distribuciones de intensidad por región anatómica."""
     set_publication_style()
     region_cols = [f"{r}_mean" for r in REGIONS]
     fig, axes = plt.subplots(2, 3, figsize=(15, 9), sharey=True)
@@ -744,26 +550,12 @@ def plot_regional_distributions(reg_df: pd.DataFrame, save_path: Optional[str] =
         ax.set_ylabel("Mean Intensity (0–255)")
     fig.suptitle("Mean Intensity Distribution by Anatomical Region", fontsize=13, fontweight="bold", y=1.01)
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 
 def build_regional_comparison_table(reg_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Builds a summary table with mean ± std intensity per region and class,
-    suitable for inclusion in reports or articles.
-
-    Parameters
-    ----------
-    reg_df : pd.DataFrame
-        DataFrame from :func:`compute_regional_stats`.
-
-    Returns
-    -------
-    pd.DataFrame
-        Table with regions as columns and classes as index,
-        formatted as ``mean ± std``.
-    """
+    """Tabla de intensidad media ± desviación por región."""
     region_cols = [f"{r}_mean" for r in REGIONS]
     mean_df = reg_df.groupby("class_name")[region_cols].mean().round(1)
     std_df  = reg_df.groupby("class_name")[region_cols].std().round(1)
@@ -777,19 +569,16 @@ def build_regional_comparison_table(reg_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Notebook 05 — Extracted features
+# Notebook 05 — Características extraídas
 # ---------------------------------------------------------------------------
 
 def plot_glcm_distributions(features_df: pd.DataFrame, save_path: Optional[str] = None) -> None:
-    """
-    1×5 panel of violin + box plots for the five GLCM properties per class.
-    References: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.graycomatrix
-    """
+    """Distribuciones de las propiedades GLCM por clase."""
     set_publication_style()
     glcm_mean_cols = [f"glcm_{p}_mean" for p in GLCM_PROPS]
-    labels = {"glcm_contrast_mean": "Contrast", "glcm_correlation_mean": "Correlation",
-               "glcm_energy_mean": "Energy", "glcm_homogeneity_mean": "Homogeneity",
-               "glcm_dissimilarity_mean": "Dissimilarity"}
+    labels = {"glcm_contrast_mean": "Contraste", "glcm_correlation_mean": "Correlación",
+               "glcm_energy_mean": "Energía", "glcm_homogeneity_mean": "Homogeneidad",
+               "glcm_dissimilarity_mean": "Disimilitud"}
     fig, axes = plt.subplots(1, 5, figsize=(20, 5))
     for ax, col in zip(axes, glcm_mean_cols):
         _violin_box_strip(ax, features_df, col)
@@ -798,15 +587,12 @@ def plot_glcm_distributions(features_df: pd.DataFrame, save_path: Optional[str] 
         ax.set_ylabel(labels[col])
     fig.suptitle("GLCM Properties (Mean over 4 Angles) — Distribution by Class", fontsize=13, fontweight="bold")
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 
 def plot_lbp_histograms(features_df: pd.DataFrame, save_path: Optional[str] = None) -> None:
-    """
-    Average LBP histogram per class.
-    References: https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.local_binary_pattern
-    """
+    """Histograma LBP promedio por clase."""
     set_publication_style()
     lbp_cols = [c for c in features_df.columns if c.startswith("lbp_")]
     fig, ax = plt.subplots(figsize=(11, 5))
@@ -816,29 +602,17 @@ def plot_lbp_histograms(features_df: pd.DataFrame, save_path: Optional[str] = No
         ax.fill_between(range(len(lbp_cols)), mean_hist, alpha=0.1, color=color)
     ax.set_xlabel("LBP Bin (uniform patterns)")
     ax.set_ylabel("Mean Normalized Frequency")
-    ax.set_title("LBP — Average Histogram by Class (P=24, R=3, uniform)",
+    ax.set_title("LBP — histograma promedio por clase (P=24, R=3, uniforme)",
                  fontweight="bold", pad=45)
     ax.legend(title="Class", frameon=True, loc="upper center",
               bbox_to_anchor=(0.5, 1.18), ncol=3, fontsize=9, edgecolor="#cccccc")
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # uncomment to save
+    # fig.savefig(save_path, dpi=300, bbox_inches="tight")  # descomentar para guardar
     plt.show()
 
 def plot_feature_summary_table(features_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Builds a summary table with the feature count per extractor group.
-
-    Parameters
-    ----------
-    features_df : pd.DataFrame
-        Full feature DataFrame.
-
-    Returns
-    -------
-    pd.DataFrame
-        Table with feature counts per group.
-    """
+    """Tabla del número de características por grupo."""
     from .features import get_feature_groups
 
     grupos = get_feature_groups(features_df)
@@ -851,25 +625,11 @@ def plot_feature_summary_table(features_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Internal helper: violin + box + strip
+# Helper interno: violín + caja + puntos
 # ---------------------------------------------------------------------------
 
 def _violin_box_strip(ax: plt.Axes, data: pd.DataFrame, col: str) -> None:
-    """
-    Draws a combined violin + box + strip plot on a given axis.
-
-    This internal function is reused across all distribution visualization
-    functions to maintain visual consistency.
-
-    Parameters
-    ----------
-    ax : matplotlib.axes.Axes
-        Target axis.
-    data : pd.DataFrame
-        DataFrame containing ``col`` and ``class_name`` columns.
-    col : str
-        Column name to plot.
-    """
+    """Dibuja un violín con caja y puntos en un eje."""
     sns.violinplot(
         data=data, x="class_name", y=col,
         order=["health", "sick", "tb"], palette=PALETTE_ACADEMIC,

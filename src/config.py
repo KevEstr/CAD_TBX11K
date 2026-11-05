@@ -47,7 +47,7 @@ N_REGIONAL = 200
 # conserva y se aborda en el notebook 07 (class_weight / SMOTE).
 N_MODELO = None
 
-# Protocolo de modelado v2.
+# Protocolo de modelado.
 CV_OUTER = 5
 CV_INNER = 3
 RANDOM_STATE = 42

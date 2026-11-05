@@ -29,7 +29,7 @@ def ensure_artifacts(
         Archivos que el notebook necesita.
     command : list de str
         Comando que los genera, p. ej.
-        ``[sys.executable, "scripts/rebuild_features.py", "--workers", "8"]``.
+        ``[sys.executable, "scripts/build_model_meta.py"]``.
     description : str
         Texto para el usuario.
     auto : bool

@@ -1,26 +1,25 @@
 # cad-tbx11k
 
-Pipeline de análisis, segmentación pulmonar y modelado sobre **TBX11K**
-para un sistema de apoyo al diagnóstico (CAD) de tuberculosis en radiografías
-de tórax.
+Pipeline de análisis, segmentación pulmonar y modelado sobre **TBX11K** para un
+sistema de apoyo al diagnóstico (CAD) de tuberculosis en radiografías de tórax.
 
-El proyecto cubre carga y auditoría del dataset, segmentación del campo
-pulmonar, extracción de características, validación cruzada anidada,
-calibración de probabilidades, evaluación estadística y control de sesgo por
-contexto de adquisición.
+El proyecto cubre carga y auditoría del dataset, segmentación del campo pulmonar,
+extracción de características, validación cruzada anidada, evaluación estadística,
+calibración de probabilidades y predicción con los modelos finales.
 
 ## Aportes
 
-- Segmentación pulmonar validada con las 1.211 cajas de lesión de TBX11K
-  (cobertura media 0.912).
-- Características con soporte de máscara, separadas en textura, HOG, forma y
-  contexto para poder auditar qué información usa el modelo.
-- Validación cruzada anidada, umbral clínico anidado, calibración a
-  prevalencia real, bootstrap y McNemar con Holm.
-- Control de sesgo de adquisición mediante residualización contextual y un
-  modelo descontaminado como referencia conservadora.
-- Pipeline reproducible con scripts, notebooks y verificación automática de
-  artefactos.
+- Segmentación pulmonar validada con las 1.211 cajas de lesión de TBX11K.
+- Características de **textura + HOG** calculadas sobre el campo pulmonar
+  segmentado. HOG usa el exterior de la máscara relleno con la mediana pulmonar
+  para no aprender el fondo ni la geometría del recorte.
+- Validación cruzada anidada (5 folds externos × 3 internos) con el selector
+  ajustado dentro de cada fold.
+- Cinco modelos comparados con el mismo protocolo: regresión logística, SVM,
+  árbol de decisión, Random Forest y XGBoost, más un baseline Dummy.
+- Evaluación OOF con balanced accuracy, recall de TB, AP, AUC, bootstrap,
+  McNemar con Holm y calibración.
+- Predicción de una radiografía nueva con `scripts/predict.py`.
 
 ---
 
@@ -31,10 +30,11 @@ cad-tbx11k/
 ├── src/
 │   ├── config.py              ← muestreo y protocolo
 │   ├── data.py                ← carga del dataset
-│   ├── lung_segmentation.py   ← segmentación pulmonar
-│   ├── preprocessing.py       ← recorte torácico, strict y armonizado
+│   ├── lung_segmentation.py   ← segmentación pulmonar validada
+│   ├── preprocessing.py       ← recorte torácico y modos de preprocesamiento
 │   ├── features.py            ← textura, HOG, forma y contexto
-│   ├── modeling.py            ← CV anidada, métricas y residualización
+│   ├── selection.py           ← selectores Chi2, MI y RF
+│   ├── modeling.py            ← utilidades de CV y métricas
 │   ├── artifacts.py           ← verificación de artefactos de notebooks
 │   └── visualization.py       ← figuras
 ├── notebooks/
@@ -49,20 +49,15 @@ cad-tbx11k/
 │   ├── 09_Evaluacion_Comparativa.ipynb
 │   └── 10_Interpretabilidad.ipynb
 ├── scripts/
-│   ├── build_model_meta.py          ← df_base.csv → df_model.csv
-│   ├── fit_final_model.py           ← modelo final descontaminado
-│   ├── rebuild_features.py          ← matriz principal
-│   ├── extract_strict_features.py   ← textura estricta/armonizada
-│   ├── validate_segmentation.py     ← validación con cajas de lesión
-│   ├── run_modeling_v2.py           ← CV anidada
-│   ├── run_imbalance_v2.py          ← desbalanceo
-│   ├── run_deconfound_v2.py         ← residualización contexto/forma
-│   ├── run_strict_deconfound.py     ← strict/harmonized + residualización
-│   └── run_ipw_v2.py                ← ponderación por propensión inversa
-├── data/                      ← dataset y artefactos (excluido de Git)
-├── models/                    ← modelos finales
-├── reports/                   ← figuras
-└── exports/                   ← PDF/HTML generados (excluido de Git)
+│   ├── build_model_meta.py      ← df_base.csv → df_model.csv
+│   ├── validate_segmentation.py ← validación con cajas de lesión
+│   ├── validate_masks.py        ← Dice/IoU contra máscaras manuales
+│   ├── preview_segmentation.py  ← control visual de la máscara
+│   └── predict.py               ← predicción individual o por lote
+├── data/                        ← dataset y artefactos (excluido de Git)
+├── models/                      ← modelos finales (excluido de Git)
+├── reports/                     ← figuras
+└── exports/                     ← PDF/HTML generados (excluido de Git)
 ```
 
 ---
@@ -79,13 +74,12 @@ cad-tbx11k/
 | `tb` | 2 | 800 | 800 |
 | **Total** | | **8.400** | **8.256** |
 
-- Los 144 duplicados exactos pertenecen a `sick`.
-- El conjunto `test` (3.302 imágenes, `unknown_*.png`) no tiene etiquetas
-  públicas y no se usa.
+- Los 144 duplicados exactos pertenecen a `sick`; la lista canónica está en
+  `src/dedup_drop_names.csv`.
+- El conjunto `test` (3.302 imágenes) no tiene etiquetas públicas y no se usa.
 - No hay identificadores de paciente; la validación cruzada es estratificada
-  por imagen, no por paciente.
-- Anotaciones COCO: 1.211 cajas de lesión en 799 imágenes TB
-  (`ActiveTuberculosis` 972, `ObsoletePulmonaryTuberculosis` 239).
+  por imagen.
+- Anotaciones COCO: 1.211 cajas de lesión en 799 imágenes TB.
 
 ### Cadena de archivos
 
@@ -95,14 +89,14 @@ cad-tbx11k/
                 ├── 02, 03, 04              (EDA y preprocesamiento)
                 └── scripts/build_model_meta.py
                         └── data/df_model.csv (8.256 tras dedup exacta)
-                                ├── scripts/rebuild_features.py
-                                │       └── data/features_tbx11k_v2.csv
-                                ├── scripts/extract_strict_features.py
-                                │       └── data/features_strict.csv
-                                └── 05–10 (features, modelos, evaluación)
+                                └── 05_Extraccion_Caracteristicas.ipynb
+                                        └── data/features_tbx11k.csv (1.860)
+                                                └── 06 → X_full.npy / y_full.npy / 06_seleccion.json
+                                                        └── 07 → 07_estrategia.json
+                                                                └── 08 → modelos 08_*.joblib + OOF
+                                                                        └── 09 → evaluación
+                                                                                └── 10 → interpretabilidad
 ```
-
-La lista de los 144 duplicados está en `src/dedup_drop_names.csv`.
 
 ---
 
@@ -116,11 +110,9 @@ La lista de los 144 duplicados está en `src/dedup_drop_names.csv`.
 4. Envolvente convexa y margen de 20 px para incluir opacidades y lesiones
    periféricas.
 5. Control de calidad: área, balance, contraste y `fallback`.
-6. Máscara estricta adicional (erosión de 12 px) para textura sin pared
-   torácica.
 
-La máscara principal es un campo pulmonar con margen; la máscara estricta se
-usa para el análisis de parénquima.
+La máscara es un campo pulmonar con margen, no una segmentación clínica de
+parénquima. Se valida con las cajas de lesión en el notebook 03.
 
 ### 2. Preprocesamiento (`src/preprocessing.py`)
 
@@ -128,94 +120,35 @@ usa para el análisis de parénquima.
 |---|---|
 | `thorax` | recorte torácico + filtro bilateral + CLAHE |
 | `lung` | como `thorax`, exterior relleno con la mediana pulmonar |
-| `strict` | máscara erosionada, recorte ajustado, exterior con mediana |
-| `strict_harmonized` | strict + normalización p2–p98, sin CLAHE |
 | `context` | imagen completa + máscara de fondo |
 | `full` | imagen completa + filtro bilateral + CLAHE |
 | `mask` | exterior a 0 (solo compatibilidad) |
+
+El modo principal del modelo es `thorax`.
 
 ### 3. Características (`src/features.py`)
 
 | Familia | N | Contenido |
 |---|---:|---|
-| `texture` | 96 | intensidad global/regional, GLCM, LBP y Gabor dentro de la máscara |
-| `hog` | 1.764 | HOG 32×32, 7×7 bloques |
-| `shape` | 64 | geometría de la máscara + miniatura 8×8 |
-| `context` | 352 | intensidad/textura del fondo + miniatura 16×16 |
-| `quality` | 4 | área, balance, contraste y fallback |
-| `strict_*` / `stricth_*` | 212 | textura estricta y armonizada |
+| `texture` | 96 | intensidad global/regional, GLCM, LBP y Gabor dentro del pulmón |
+| `hog` | 1.764 | HOG 32×32, 7×7 bloques, calculado con la máscara rellena |
+| **Total del modelo** | **1.860** | textura + HOG |
 
-La textura usa la máscara como soporte; el exterior se rellena con la mediana
-pulmonar. El contraste se calcula como `p95 − p5`.
+`shape`, `context` y `quality` existen en `src/features.py` para análisis de
+sesgo, pero **no se usan** en la matriz principal del modelo. Las columnas
+`mask_area_fraction`, `mask_lr_balance`, `mask_contrast` y `mask_fallback` se
+guardan para control de calidad, no como features.
 
-### 4. Modelado (`src/modeling.py`)
+### 4. Modelado (`08_Modelos_ML.ipynb`)
 
 - Validación cruzada externa de 5 folds e interna de 3 folds.
-- Selección ANOVA F dentro de cada fold.
-- Modelos: Dummy, regresión logística, SVM RBF, RandomForest y XGBoost.
-- Métricas: balanced accuracy, sensibilidad/especificidad TB, average
-  precision, AUC, Brier, bootstrap estratificado y McNemar con Holm.
-- Umbral clínico: mayor umbral que mantiene sensibilidad ≥ 0.90.
-- Calibración de probabilidades a la prevalencia observada.
-- `ContextResidualizer`: elimina de la textura la componente lineal explicable
-  por contexto/forma, ajustado dentro de cada fold.
-
----
-
-## Resultados
-
-Evaluación con predicciones out-of-fold, 5 folds externos y 3 internos.
-
-### Segmentación
-
-| Método | Cobertura media de cajas | Cobertura ≥ 0.8 | Centroide dentro |
-|---|---:|---:|---:|
-| Otsu | 0.539 | 15.3 % | 73.1 % |
-| Segmentación anatómica | **0.912** | **89.1 %** | **99.1 %** |
-
-### Familias y modelos
-
-| Conjunto | Modelo | BalAcc | Sens TB | Espec | AP TB | AUC |
-|---|---|---:|---:|---:|---:|---:|
-| texture | LR | 0.815 | 0.811 | 0.819 | 0.591 | 0.890 |
-| texture | SVM | 0.870 | 0.836 | 0.904 | 0.714 | 0.936 |
-| texture | XGB | 0.851 | 0.850 | 0.852 | 0.729 | 0.923 |
-| texture | RF | 0.854 | 0.842 | 0.866 | 0.732 | 0.927 |
-| hog | LR | 0.779 | 0.774 | 0.785 | 0.468 | 0.850 |
-| texture+hog | LR | 0.855 | 0.826 | 0.883 | 0.697 | 0.922 |
-| context | LR | 0.892 | 0.888 | 0.897 | 0.807 | 0.952 |
-| context | SVM | 0.927 | 0.920 | 0.934 | 0.889 | 0.974 |
-| shape | LR | 0.652 | 0.698 | 0.607 | 0.191 | 0.697 |
-| texture+shape+context | LR | 0.934 | 0.925 | 0.943 | 0.893 | 0.976 |
-
-### Control de sesgo de contexto
-
-| Conjunto | Modelo | BalAcc | AP | AUC |
-|---|---|---:|---:|---:|
-| textura | SVM | 0.870 | 0.714 | 0.936 |
-| textura local (sin intensidad global) | SVM | 0.853 | 0.669 | 0.920 |
-| textura residualizada vs contexto | SVM | 0.720 | 0.365 | 0.798 |
-| textura estricta | SVM | 0.874 | 0.745 | 0.941 |
-| textura estricta residualizada vs contexto | SVM | 0.735 | 0.366 | 0.805 |
-| textura armonizada residualizada | SVM | 0.711 | 0.326 | 0.778 |
-| IPW (propensión inversa) | SVM | 0.872 | 0.745 | 0.937 |
-
-### Calibración (LR textura)
-
-- Brier sin calibrar: 0.120.
-- Brier calibrada: **0.057**.
-- Umbral Youden calibrado: 0.081 → sensibilidad 0.811, especificidad 0.819.
-- Sensibilidad ≥ 0.90: umbral 0.041 → sensibilidad 0.900, especificidad 0.672.
-
-### Desbalanceo
-
-| Estrategia | BalAcc | Recall TB | AP |
-|---|---:|---:|---:|
-| SMOTE | 0.814 | 0.778 | 0.600 |
-| `class_weight='balanced'` | 0.812 | 0.773 | 0.599 |
-| RandomOverSampler | 0.805 | 0.760 | 0.596 |
-| RandomUnderSampler | 0.803 | 0.774 | 0.586 |
-| Sin desbalanceo | 0.702 | 0.418 | 0.626 |
+- Selector (Chi², MI o RF) elegido en el notebook 06 y ajustado dentro de cada
+  fold.
+- Modelos: Logistic Regression, SVM, Decision Tree, Random Forest y XGBoost,
+  más Dummy.
+- Métricas: balanced accuracy, F1 macro, recall de TB, AUC-ROC macro, AP de TB.
+- El mejor modelo se elige por balanced accuracy OOF; los cinco modelos finales
+  se reajustan con las 8.256 imágenes y se guardan en `models/`.
 
 ---
 
@@ -236,49 +169,65 @@ El dataset debe descargarse en `data/TBX11K/` con la estructura
 ## Reproducción
 
 ```powershell
-# 1. Carga y DataFrame base
+# 1. Carga del dataset y DataFrame base
 jupyter nbconvert --to notebook --execute notebooks/01_Carga_Datos.ipynb --inplace
 
-# 2. Metadatos de modelado y features
+# 2. Metadatos de modelado (8.256 imágenes únicas)
 python scripts/build_model_meta.py
-python scripts/rebuild_features.py --workers 8
 
-# 3. Features estrictas y validación de segmentación
-python scripts/extract_strict_features.py --workers 8
-python scripts/validate_segmentation.py
-
-# 4. Modelado principal
-python scripts/run_modeling_v2.py
-
-# 5. Desbalanceo y control de sesgo
-python scripts/run_imbalance_v2.py
-python scripts/run_deconfound_v2.py
-python scripts/run_strict_deconfound.py
-python scripts/run_ipw_v2.py
-
-# 6. Modelo final
-python scripts/fit_final_model.py
-
-# 7. Notebooks 03 y 05–10
+# 3. Preprocesamiento y validación de segmentación
 jupyter nbconvert --to notebook --execute notebooks/03_Preprocesamiento.ipynb --inplace
+
+# 3b. Validación opcional contra máscaras manuales (Dice/IoU)
+python scripts/validate_masks.py --masks-dir ruta/a/mascaras
+
+# 3c. Control visual de una máscara
+python scripts/preview_segmentation.py --image ruta/a/radiografia.png --out-dir reports/seg
+
+# 4. Extracción de características, selección y desbalanceo
+jupyter nbconvert --to notebook --execute notebooks/05_Extraccion_Caracteristicas.ipynb --inplace
+jupyter nbconvert --to notebook --execute notebooks/06_Seleccion_Caracteristicas.ipynb --inplace
+jupyter nbconvert --to notebook --execute notebooks/07_Desbalanceo.ipynb --inplace
+
+# 5. Entrenamiento de los cinco modelos
+jupyter nbconvert --to notebook --execute notebooks/08_Modelos_ML.ipynb --inplace
+
+# 6. Evaluación e interpretabilidad
+jupyter nbconvert --to notebook --execute notebooks/09_Evaluacion_Comparativa.ipynb --inplace
+jupyter nbconvert --to notebook --execute notebooks/10_Interpretabilidad.ipynb --inplace
 ```
 
-Los notebooks 03 y 05–10 verifican sus artefactos y ejecutan el productor
-correspondiente si falta algún archivo.
+Los notebooks 03 y 05–10 verifican sus artefactos y generan lo que falte cuando
+corresponde.
+
+### Predicción de una imagen
+
+```powershell
+python scripts/predict.py --image ruta/a/radiografia.png
+python scripts/predict.py --image ruta.png --model "XGBoost"
+python scripts/predict.py --image ruta.png --save-mask mascara.png --save-preprocessed thorax.png
+python scripts/predict.py --image ruta.png --heatmap heatmap.png
+python scripts/predict.py --csv data/imagenes.csv --out data/predicciones.csv
+```
+
+El manifiesto `models/08_manifest.json` indica el modelo seleccionado por la CV
+y `models/08_feature_schema.json` fija el orden exacto de las features. Si el
+CSV de lote incluye `label`, se calculan balanced accuracy, recall por clase y
+matriz de confusión.
 
 ### Salidas principales
 
-- `data/seg_summary_v2.json`
-- `data/features_tbx11k_v2.csv`
-- `data/features_strict.csv`
-- `data/v2/summary_models.csv`
-- `data/v2/deconfound_summary.csv`
-- `data/v2/strict_deconfound_summary.csv`
-- `data/v2/ipw_summary.csv`
-- `models/v2_lr_texture.joblib`
-- `models/v2_svm_strict_resid_context.joblib`
-- `reports/03_segmentacion_*.png`
-- `reports/v2/*.png`
+- `data/df_model.csv`
+- `data/features_tbx11k.csv`
+- `data/X_full.npy`, `data/y_full.npy`
+- `data/06_seleccion.json`, `data/06_selected_feature_names.json`
+- `data/07_estrategia.json`
+- `data/08_oof_predicciones.csv`, `data/08_oof_scores.npz`
+- `data/08_cv_resumen.csv`, `data/08_cv_por_fold.csv`
+- `data/08_mejores_params.json`, `data/08_procedimiento.json`, `data/08_manifest.json`
+- `models/08_*.joblib`, `models/08_manifest.json`
+- `data/09_*.csv`, `data/09_*.json`
+- `reports/03_segmentacion_*.png`, `reports/06_seleccion.png`, `reports/09_*.png`
 
 ---
 
@@ -292,17 +241,16 @@ regeneran con `nbconvert` cuando se necesiten.
 
 ## Alcance y consideraciones
 
+- **Segmentación**: no hay máscaras manuales de pulmón en TBX11K; la validación
+  usa las cajas de lesión. La máscara principal es un campo pulmonar con margen,
+  no una segmentación clínica de parénquima. El prior vertical (2–82 % del cuerpo) y el margen de 20 px son heurísticos y deben validarse. Para medir precisión de la máscara
+  se incluye `scripts/validate_masks.py` (Dice/IoU contra un subconjunto
+  anotado manualmente).
 - **Contexto de adquisición**: TBX11K presenta confusión entre clase y fuente.
-  El pipeline incluye un control explícito de ese sesgo y reporta un modelo
-  residualizado como referencia conservadora. Los modelos que incorporan
-  contexto/forma deben interpretarse como clasificadores de fuente, no como
-  detección clínica.
-- **Segmentación**: no hay máscaras manuales de pulmón; la validación usa las
-  cajas de lesión. La máscara principal es un campo pulmonar con margen.
+  El modelo principal usa solo textura + HOG del campo pulmonar; el notebook 09
+  incluye un baseline de fondo/borde para cuantificar ese sesgo.
 - **Test**: las 3.302 imágenes de `test` no tienen etiquetas públicas; no se
   dispone de validación externa.
-- **Pacientes**: no hay identificadores de paciente; la CV es estratificada
-  por imagen.
-- **Umbral**: se estima con CV anidada y es una estimación interna.
-- **Modelo residualizado**: la residualización puede eliminar también señal
-  pulmonar correlacionada con la fuente; se reporta como cota conservadora.
+- **Pacientes**: no hay identificadores de paciente; la CV es estratificada por
+  imagen.
+- **Umbral**: se estima con CV y es una estimación interna.

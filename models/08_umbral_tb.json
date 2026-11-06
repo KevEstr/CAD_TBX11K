@@ -1,0 +1,9 @@
+{
+  "modelo": "Logistic Regression",
+  "tipo": "orientativo_oof",
+  "clase": "tb",
+  "threshold_youden": 0.315899,
+  "threshold_sens90": 0.1938,
+  "sens_sens90": 0.9,
+  "spec_sens90": 0.8677575107296137
+}

@@ -27,7 +27,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.lung_segmentation import SEG_SIZE, segment_lungs  # noqa: E402
+from src.lung_segmentation import SEG_SIZE  # noqa: E402
+from src.preprocessing import segment_image  # noqa: E402
 
 DATA = ROOT / "data"
 
@@ -78,11 +79,9 @@ def main() -> None:
         if ref is None or not ref.any():
             continue
 
-        img = cv2.imread(row["image_path"], cv2.IMREAD_GRAYSCALE)
-        if img is None:
+        pred, quality = segment_image(row["image_path"])
+        if pred is None:
             continue
-        img512 = cv2.resize(img, SEG_SIZE, interpolation=cv2.INTER_AREA)
-        pred, quality = segment_lungs(img512)
 
         inter = int((pred & ref).sum())
         union = int((pred | ref).sum())

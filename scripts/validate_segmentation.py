@@ -15,6 +15,7 @@ Uso:
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from collections import defaultdict
@@ -31,7 +32,7 @@ from scipy.ndimage import binary_fill_holes
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.lung_segmentation import segment_lungs  # noqa: E402
+from src.preprocessing import segment_image  # noqa: E402
 
 COCO = ROOT / "data" / "TBX11K" / "annotations" / "json" / "TBX11K_trainval.json"
 META = ROOT / "data" / "df_model.csv"
@@ -43,7 +44,7 @@ TB_CATEGORIES = {1: "ActiveTuberculosis", 2: "ObsoletePulmonaryTuberculosis",
 
 
 def old_otsu_mask(img256: np.ndarray) -> np.ndarray:
-    """Segmentación heurística anterior (Otsu invertido), para comparación."""
+    """Segmentación Otsu de referencia para comparar cobertura."""
     blur = cv2.GaussianBlur(img256, (5, 5), 0)
     _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     n, labels, stats, cent = cv2.connectedComponentsWithStats(th, 8)
@@ -107,6 +108,18 @@ def box_coverage(mask: np.ndarray, boxes: list[tuple[int, list[float]]]) -> tupl
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--limit", type=int, default=0, help="Número de imágenes TB a validar."
+    )
+    parser.add_argument(
+        "--quality-per-class",
+        type=int,
+        default=30,
+        help="Imágenes por clase para el resumen de calidad.",
+    )
+    args = parser.parse_args()
+
     coco, boxes = load_coco_boxes()
     print("Categorías COCO:", coco["categories"])
     print("Anotaciones por categoría:",
@@ -115,6 +128,8 @@ def main() -> None:
 
     meta = pd.read_csv(META)
     tb = meta[meta["class_name"] == "tb"].copy()
+    if args.limit:
+        tb = tb.head(args.limit).copy()
 
     rows = []
     for _, r in tb.iterrows():
@@ -123,7 +138,9 @@ def main() -> None:
             continue
         img512 = cv2.resize(img, (512, 512), interpolation=cv2.INTER_AREA)
         name = Path(r["image_path"]).name
-        mask_new, q = segment_lungs(img512)
+        mask_new, q = segment_image(r["image_path"])
+        if mask_new is None:
+            continue
         cov_new, cent_new, cat_new = box_coverage(mask_new, boxes.get(name, []))
 
         img256 = cv2.resize(img512, (256, 256), interpolation=cv2.INTER_AREA)
@@ -149,15 +166,13 @@ def main() -> None:
     df = pd.DataFrame(rows)
     df.to_csv(ROOT / "data" / "seg_validation.csv", index=False)
 
-    # Calidad en una muestra estratificada (300 por clase).
+    # Calidad en una muestra estratificada.
     qrows = []
     for cls, g in meta.groupby("class_name"):
-        for _, r in g.sample(min(300, len(g)), random_state=42).iterrows():
-            img = cv2.imread(r["image_path"], cv2.IMREAD_GRAYSCALE)
-            if img is None:
+        for _, r in g.sample(min(args.quality_per_class, len(g)), random_state=42).iterrows():
+            _, q = segment_image(r["image_path"])
+            if q is None:
                 continue
-            img512 = cv2.resize(img, (512, 512), interpolation=cv2.INTER_AREA)
-            _, q = segment_lungs(img512)
             qrows.append({
                 "class_name": cls,
                 "area": q.area_fraction,
@@ -208,8 +223,12 @@ def main() -> None:
     for row_i, cls in enumerate(["health", "sick", "tb"]):
         sample = meta[meta["class_name"] == cls].sample(1, random_state=7).iloc[0]
         img = cv2.imread(sample["image_path"], cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            continue
         img512 = cv2.resize(img, (512, 512))
-        mask, q = segment_lungs(img512)
+        mask, q = segment_image(sample["image_path"])
+        if mask is None:
+            continue
         contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
         overlay = cv2.cvtColor(img512, cv2.COLOR_GRAY2BGR)
@@ -240,8 +259,12 @@ def main() -> None:
     for ax, (_, r) in zip(axes.ravel(), chosen.iterrows()):
         path = name_to_path[r["image_name"]]
         img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            continue
         img512 = cv2.resize(img, (512, 512))
-        mask, _ = segment_lungs(img512)
+        mask, _ = segment_image(path)
+        if mask is None:
+            continue
         vis = cv2.cvtColor(img512, cv2.COLOR_GRAY2BGR)
         contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)

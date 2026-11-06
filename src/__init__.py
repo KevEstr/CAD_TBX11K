@@ -9,7 +9,7 @@ Módulos
 -------
 config            : variables de muestreo y protocolo compartidas.
 data              : carga del dataset y construcción del DataFrame base.
-lung_segmentation : segmentación pulmonar anatómica validada.
+lung_segmentation : segmentación pulmonar con PSPNet preentrenado.
 preprocessing     : recorte torácico + Bilateral Filter + CLAHE.
 features          : textura, HOG, forma y contexto (con soporte de máscara).
 modeling          : CV anidada, métricas, calibración y McNemar.
@@ -47,10 +47,8 @@ from .data import (
 
 from .lung_segmentation import (
     MaskQuality,
-    body_mask,
     segment_lungs as segment_lungs_512,
     thorax_bbox,
-    thorax_envelope,
 )
 
 from .preprocessing import (
@@ -95,5 +93,5 @@ from .visualization import (
     plot_feature_summary_table,
 )
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 __author__ = "CAD-TBX11K Pipeline"

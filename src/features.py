@@ -56,6 +56,7 @@ from skimage.feature import graycomatrix, graycoprops, hog, local_binary_pattern
 from skimage.filters import gabor as skimage_gabor
 from tqdm import tqdm
 
+from .config import INTENSITY_NORM
 from .preprocessing import IMG_SIZE, preprocess_bundle
 
 # ---------------------------------------------------------------------------
@@ -106,9 +107,28 @@ QUALITY_COLS = {
 }
 
 
-def model_feature_columns(features_df: pd.DataFrame) -> list[str]:
-    """Columnas usadas por el modelo (excluye metadatos y calidad de máscara)."""
-    return [c for c in features_df.columns if c not in META_COLS | QUALITY_COLS]
+INTENSITY_BASE = {"mean", "std", "contrast", "entropy"}
+
+
+def intensity_columns(features_df: pd.DataFrame) -> list[str]:
+    """Columnas de intensidad global y regional, sensibles a la exposición."""
+    region_prefixes = tuple(f"{r}_" for r in REGIONS)
+    return [
+        c for c in features_df.columns
+        if c in INTENSITY_BASE or c.startswith(region_prefixes)
+    ]
+
+
+def model_feature_columns(
+    features_df: pd.DataFrame,
+    include_intensity: bool = False,
+) -> list[str]:
+    """Columnas del modelo; por defecto excluye intensidad global y regional."""
+    cols = [c for c in features_df.columns if c not in META_COLS | QUALITY_COLS]
+    if include_intensity:
+        return cols
+    excluir = set(intensity_columns(features_df))
+    return [c for c in cols if c not in excluir]
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +443,7 @@ def extract_features(
     bordes del fondo ni la geometría del recorte. El contexto se extrae de la
     imagen completa con la máscara de fondo.
     """
-    bundle = preprocess_bundle(image_path)
+    bundle = preprocess_bundle(image_path, intensity_norm=INTENSITY_NORM)
     if bundle is None:
         return None
 
@@ -581,7 +601,7 @@ def verify_extractors(df_base: pd.DataFrame) -> None:
         "HOG": feat_hog,
         "PHOG": feat_phog,
     }
-    bundle = preprocess_bundle(path)
+    bundle = preprocess_bundle(path, intensity_norm=INTENSITY_NORM)
     img, mask = bundle["thorax"]
     for name, fn in grupos.items():
         n = len(fn(img, mask) if name in ("global", "regional", "GLCM", "LBP", "Gabor") else fn(img))

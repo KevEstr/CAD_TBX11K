@@ -1,50 +1,32 @@
-"""Segmentación del campo pulmonar en radiografías de tórax (TBX11K).
+"""Segmentación pulmonar con un modelo preentrenado de tórax.
 
-La máscara excluye fondo y abdomen, incluye lesiones y se valida con las cajas
-de lesión del dataset. Es un campo pulmonar con margen, no una segmentación
-clínica de parénquima.
+Se usa PSPNet de ``torchxrayvision`` (clases ``Left Lung`` y ``Right Lung``).
+La máscara se umbraliza, se limpia y se dilata un margen pequeño para incluir
+lesiones periféricas. Si el modelo no detecta pulmones, se devuelve un campo
+torácico central marcado con ``fallback=True`` para no romper la extracción.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+import os
+from dataclasses import dataclass
 from typing import Optional
 
 import cv2
 import numpy as np
 from scipy.ndimage import binary_fill_holes
 
-# Parámetros
-
 SEG_SIZE: tuple[int, int] = (512, 512)
-"""Resolución de trabajo para segmentar (se reduce después a 256)."""
 
-BODY_BG_DELTA: int = 12
-"""Margen de intensidad sobre el nivel de fondo del borde para separar cuerpo."""
+LUNG_THRESHOLD: float = 0.50
+LUNG_MARGIN_PX: int = 12
+MIN_COMPONENT_FRACTION: float = 0.005
+MIN_AREA_FRACTION: float = 0.04
+MAX_AREA_FRACTION: float = 0.60
+MIN_LR_BALANCE: float = 0.20
+STRICT_ERODE_PX: int = 12
 
-BODY_MIN_FRACTION: float = 0.25
-"""Fracción mínima del área de la imagen que debe ocupar el cuerpo."""
-
-LOCAL_SIGMA: float = 24.0
-"""Sigma del filtro gaussiano usado para el contraste local (escala torácica)."""
-
-CAND_SCORE_PERCENTILE: float = 50.0
-"""Percentil del score de oscuridad local usado como umbral inicial."""
-
-LUNG_MARGIN_PX: int = 20
-"""Margen de dilatación (px a 512) para incluir lesiones periféricas."""
-
-MIN_LUNG_FRACTION: float = 0.06
-"""Área mínima de cada pulmón respecto al cuerpo."""
-
-MAX_LUNG_FRACTION: float = 0.48
-"""Área máxima de cada pulmón respecto al cuerpo (evita cuerpo entero)."""
-
-MIN_LR_BALANCE: float = 0.35
-"""Relación mínima entre el pulmón pequeño y el grande."""
-
-FALLBACK_AREA_RANGE: tuple[float, float] = (0.10, 0.75)
-"""Rango aceptable de área pulmonar total respecto al cuerpo."""
+_MODEL = None
 
 
 @dataclass
@@ -52,8 +34,8 @@ class MaskQuality:
     """Métricas objetivas de una máscara pulmonar."""
 
     area_fraction: float
-    area_left: float
-    area_right: float
+    area_left: int
+    area_right: int
     lr_balance: float
     mean_inside: float
     mean_outside: float
@@ -61,161 +43,44 @@ class MaskQuality:
     fallback: bool
     reason: str = ""
 
-    def as_dict(self) -> dict:
-        return asdict(self)
-
-
-# Utilidades morfológicas
 
 def _disk(radius: int) -> np.ndarray:
-    return cv2.getStructuringElement(
+    kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
     )
+    return kernel
 
 
-def _largest_component(mask: np.ndarray) -> np.ndarray:
-    """Devuelve la componente conectada de mayor área."""
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(
-        mask.astype(np.uint8), connectivity=8
-    )
-    if n <= 1:
-        return np.zeros_like(mask, dtype=bool)
-    idx = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-    return labels == idx
+def _get_model():
+    """Carga PSPNet una sola vez."""
+    global _MODEL
+    if _MODEL is None:
+        try:
+            import torch
+            import torchxrayvision as xrv
+        except ImportError as exc:
+            raise ImportError(
+                "La segmentación requiere torch, torchvision y torchxrayvision. "
+                "Instala con: pip install torch torchvision torchxrayvision"
+            ) from exc
+        torch.set_num_threads(max(1, os.cpu_count() or 1))
+        model = xrv.baseline_models.chestx_det.PSPNet()
+        model.eval()
+        _MODEL = model
+    return _MODEL
 
 
-def _components_lateral(
-    mask: np.ndarray,
-    min_area: float,
-    max_area: float,
-    y_range: Optional[tuple[float, float]] = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Devuelve la mejor componente lateral izquierda y derecha."""
-    h, w = mask.shape
-    n, labels, stats, cent = cv2.connectedComponentsWithStats(
-        mask.astype(np.uint8), connectivity=8
-    )
-    candidatos = []
-    for i in range(1, n):
-        area = float(stats[i, cv2.CC_STAT_AREA])
-        if area < min_area or area > max_area:
-            continue
-        cx, cy = cent[i]
-        if abs(cx - w / 2.0) < 0.08 * w:
-            continue
-        if y_range is not None and not (y_range[0] <= cy <= y_range[1]):
-            continue
-        candidatos.append((area, i, cx))
-
-    izq = [c for c in candidatos if c[2] < w / 2.0]
-    der = [c for c in candidatos if c[2] >= w / 2.0]
-
-    left = np.zeros_like(mask, dtype=bool)
-    right = np.zeros_like(mask, dtype=bool)
-    if izq:
-        left = labels == max(izq, key=lambda x: x[0])[1]
-    if der:
-        right = labels == max(der, key=lambda x: x[0])[1]
-    return left, right
-
-
-def _convex_hull(mask: np.ndarray) -> np.ndarray:
-    """Envolvente convexa de una máscara booleana."""
-    puntos = cv2.findNonZero(mask.astype(np.uint8))
-    if puntos is None:
-        return np.zeros_like(mask, dtype=bool)
-    hull = cv2.convexHull(puntos)
-    salida = np.zeros_like(mask, dtype=np.uint8)
-    cv2.fillConvexPoly(salida, hull, 1)
-    return salida.astype(bool)
-
-
-# Segmentación
-
-def body_mask(img: np.ndarray) -> np.ndarray:
-    """Máscara del cuerpo sin el fondo conectado al borde."""
-    blur = cv2.GaussianBlur(img, (5, 5), 0)
-    h, w = blur.shape
-
-    borde = np.concatenate([blur[0, :], blur[-1, :], blur[:, 0], blur[:, -1]])
-    nivel_fondo = float(np.median(borde))
-    p95 = float(np.percentile(blur, 95))
-    umbral = min(nivel_fondo + BODY_BG_DELTA, 0.45 * p95)
-
-    fondo_candidato = (blur <= umbral).astype(np.uint8)
-    n, labels, _, _ = cv2.connectedComponentsWithStats(fondo_candidato, connectivity=8)
-    if n <= 1:
-        return np.ones_like(blur, dtype=bool)
-
-    etiquetas_borde = set(labels[0, :]) | set(labels[-1, :])
-    etiquetas_borde |= set(labels[:, 0]) | set(labels[:, -1])
-    etiquetas_borde.discard(0)
-
-    fondo = np.isin(labels, list(etiquetas_borde))
-    cuerpo = ~fondo
-    cuerpo = _largest_component(cuerpo)
-    cuerpo = binary_fill_holes(cuerpo)
-    cuerpo = cv2.morphologyEx(
-        cuerpo.astype(np.uint8), cv2.MORPH_CLOSE, _disk(6)
-    ).astype(bool)
-
-    if cuerpo.sum() < BODY_MIN_FRACTION * h * w:
-        return np.ones_like(blur, dtype=bool)
-    return cuerpo
-
-
-def thorax_envelope(img: np.ndarray, body: np.ndarray) -> np.ndarray:
-    """Campo torácico sin fondo, brazos, abdomen ni mediastino central."""
+def _fallback_mask(img: np.ndarray, reason: str) -> tuple[np.ndarray, MaskQuality]:
+    """Campo torácico central para casos en que el modelo no detecta pulmón."""
     h, w = img.shape
-    ys, xs = np.where(body)
-    if len(xs) == 0:
-        # Último recurso: elipses anatómicas.
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.ellipse(mask, (w // 3, h // 2), (w // 5, int(0.36 * h)), 0, 0, 360, 1, -1)
-        cv2.ellipse(mask, (2 * w // 3, h // 2), (w // 5, int(0.36 * h)), 0, 0, 360, 1, -1)
-        return mask.astype(bool)
-
-    y0b, y1b = int(ys.min()), int(ys.max())
-    x0b, x1b = int(xs.min()), int(xs.max())
-    alto = max(y1b - y0b, 1)
-
-    # Ancho torácico robusto: mediana de anchos de fila en la zona media.
-    anchos = []
-    for y in range(y0b + int(0.25 * alto), y0b + int(0.70 * alto)):
-        fila = np.where(body[y])[0]
-        if len(fila) >= 2:
-            anchos.append(fila[-1] - fila[0])
-    ancho_torso = int(np.median(anchos)) if anchos else x1b - x0b
-    ancho_torso = int(np.clip(ancho_torso, 0.50 * w, 0.94 * w))
-
-    # Centro del tórax: mediana de los centros de fila (robusta a brazos).
-    centros = []
-    for y in range(y0b + int(0.25 * alto), y0b + int(0.70 * alto)):
-        fila = np.where(body[y])[0]
-        if len(fila) >= 2:
-            centros.append((fila[0] + fila[-1]) / 2.0)
-    cx = int(np.median(centros)) if centros else (x0b + x1b) // 2
-
-    x0 = max(0, cx - ancho_torso // 2)
-    x1 = min(w, cx + ancho_torso // 2)
-    y0 = max(0, y0b + int(0.03 * alto))
-    y1 = min(h, y0b + int(0.82 * alto))
-
-    env = np.zeros((h, w), dtype=bool)
-    env[y0:y1, x0:x1] = True
-    env &= body
-
-    # Banda mediastínica central: se excluye el corazón/mediastino, pero se
-    # deja un margen para no cortar el pulmón medial.
-    half = max(3, int(0.055 * ancho_torso))
-    env[:, max(0, cx - half): min(w, cx + half)] = False
-    return binary_fill_holes(env)
-
-
-def _fallback_mask(img: np.ndarray, body: np.ndarray, reason: str) -> tuple[np.ndarray, MaskQuality]:
-    """Respaldo anatómico marcado con ``fallback=True``."""
-    mask = thorax_envelope(img, body)
-    q = mask_quality(img, mask, body, fallback=True, reason=reason)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    eje_x = (w // 3, 2 * w // 3)
+    eje_y = h // 2
+    radio = (int(0.20 * w), int(0.34 * h))
+    for cx in eje_x:
+        cv2.ellipse(mask, (cx, eje_y), radio, 0, 0, 360, 1, -1)
+    mask = binary_fill_holes(mask.astype(bool))
+    q = mask_quality(img, mask, fallback=True, reason=reason)
     return mask, q
 
 
@@ -226,12 +91,21 @@ def mask_quality(
     fallback: bool = False,
     reason: str = "",
 ) -> MaskQuality:
-    """Calcula métricas de calidad de una máscara pulmonar."""
-    if body is None:
-        body = np.ones_like(mask, dtype=bool)
-    area_body = max(int(body.sum()), 1)
-    area_mask = int(mask.sum())
+    """Calcula área, balance y contraste de una máscara."""
     h, w = mask.shape
+    if body is None:
+        body = np.zeros_like(mask, dtype=bool)
+        ys, xs = np.where(mask)
+        if len(xs):
+            y0 = max(0, int(ys.min() - 0.05 * h))
+            y1 = min(h, int(ys.max() + 0.05 * h))
+            x0 = max(0, int(xs.min() - 0.05 * w))
+            x1 = min(w, int(xs.max() + 0.05 * w))
+            body[y0:y1, x0:x1] = True
+        else:
+            body[:] = True
+
+    area_mask = int(mask.sum())
     area_left = int(mask[:, : w // 2].sum())
     area_right = int(mask[:, w // 2:].sum())
     balance = min(area_left, area_right) / max(max(area_left, area_right), 1)
@@ -241,7 +115,7 @@ def mask_quality(
     mean_in = float(dentro.mean()) if dentro.size else float("nan")
     mean_out = float(fuera.mean()) if fuera.size else float("nan")
     return MaskQuality(
-        area_fraction=area_mask / area_body,
+        area_fraction=area_mask / (h * w),
         area_left=area_left,
         area_right=area_right,
         lr_balance=float(balance),
@@ -254,97 +128,51 @@ def mask_quality(
 
 
 def segment_lungs(img: np.ndarray) -> tuple[np.ndarray, MaskQuality]:
-    """Segmenta el campo pulmonar de una imagen 512×512."""
+    """Segmenta pulmones con PSPNet y devuelve máscara y calidad."""
     if img.ndim != 2:
         raise ValueError("segment_lungs espera una imagen en escala de grises.")
     if img.shape != SEG_SIZE:
         img = cv2.resize(img, SEG_SIZE, interpolation=cv2.INTER_AREA)
 
-    h, w = img.shape
-    blur = cv2.GaussianBlur(img, (5, 5), 0)
-    body = body_mask(img)
-    envelope = thorax_envelope(img, body)
+    import torch
+    import torchxrayvision as xrv
 
-    # 1. Score de oscuridad local: positivo donde la imagen es más oscura que
-    #    su entorno amplio (pulmones). Robusto a iluminación global.
-    fondo_local = cv2.GaussianBlur(blur.astype(np.float32), (0, 0), LOCAL_SIGMA)
-    score = fondo_local - blur.astype(np.float32)
-    score_body = score[envelope]
-    if score_body.size == 0:
-        return _fallback_mask(img, body, "campo torácico vacío")
+    model = _get_model()
+    normalizada = xrv.datasets.normalize(img, 255)
+    tensor = torch.from_numpy(normalizada).unsqueeze(0).unsqueeze(0).float()
 
-    umbral_score = float(np.percentile(score_body, CAND_SCORE_PERCENTILE))
-    cand = envelope & (score > max(umbral_score, 1.0))
+    with torch.no_grad():
+        logits = model(tensor)
+        probs = torch.sigmoid(logits)[0]
 
-    # 2. Relleno de huecos pequeños (vasos, lesiones claras) antes de separar.
-    cand = cv2.morphologyEx(cand.astype(np.uint8), cv2.MORPH_CLOSE, _disk(9)).astype(bool)
-    cand = cv2.morphologyEx(cand.astype(np.uint8), cv2.MORPH_OPEN, _disk(4)).astype(bool)
+    idx_left = model.targets.index("Left Lung")
+    idx_right = model.targets.index("Right Lung")
+    prob = torch.maximum(probs[idx_left], probs[idx_right]).cpu().numpy()
+    mask = (prob >= LUNG_THRESHOLD).astype(np.uint8)
 
-    # 3. Separar pulmones y descartar mediastino/abdomen.
-    area_body = max(int(body.sum()), 1)
-    ys, _ = np.where(body)
-    y0b, y1b = int(ys.min()), int(ys.max())
-    alto = max(y1b - y0b, 1)
-    # Los pulmones ocupan la parte superior del cuerpo; el abdomen queda fuera.
-    y_range = (y0b + 0.02 * alto, y0b + 0.82 * alto)
-    left, right = _components_lateral(
-        cand,
-        min_area=MIN_LUNG_FRACTION * area_body,
-        max_area=MAX_LUNG_FRACTION * area_body,
-        y_range=y_range,
-    )
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, _disk(2))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, _disk(5))
 
-    # Si un lado falla, se intenta con el candidato más laxo.
-    if not left.any() or not right.any():
-        cand2 = envelope & (score > float(np.percentile(score_body, 38.0)))
-        cand2 = cv2.morphologyEx(cand2.astype(np.uint8), cv2.MORPH_CLOSE, _disk(15)).astype(bool)
-        left2, right2 = _components_lateral(
-            cand2,
-            min_area=0.4 * MIN_LUNG_FRACTION * area_body,
-            max_area=MAX_LUNG_FRACTION * area_body,
-            y_range=y_range,
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    min_area = MIN_COMPONENT_FRACTION * SEG_SIZE[0] * SEG_SIZE[1]
+    keep = [i for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= min_area]
+    if not keep:
+        return _fallback_mask(img, "PSPNet no detectó pulmones")
+
+    mask = np.isin(labels, keep).astype(np.uint8)
+    mask = binary_fill_holes(mask).astype(np.uint8)
+    if LUNG_MARGIN_PX > 0:
+        mask = cv2.dilate(mask, _disk(LUNG_MARGIN_PX)).astype(bool)
+    mask = mask.astype(bool)
+
+    q = mask_quality(img, mask)
+    if not (MIN_AREA_FRACTION <= q.area_fraction <= MAX_AREA_FRACTION):
+        return _fallback_mask(
+            img, f"área fuera de rango: {q.area_fraction:.2f}"
         )
-        if not left.any() and left2.any():
-            left = left2
-        if not right.any() and right2.any():
-            right = right2
-
-    if not left.any() or not right.any():
-        return _fallback_mask(img, body, "no se detectaron dos pulmones")
-
-    # 4. Envolvente convexa por pulmón: absorbe lesiones periféricas y
-    #    opacidades que no superan el umbral de oscuridad.
-    left = _convex_hull(left)
-    right = _convex_hull(right)
-
-    # 5. Margen perilesional y restricción al campo torácico (ya excluye
-    #    fondo, brazos y mediastino).
-    margen = _disk(LUNG_MARGIN_PX)
-    left = cv2.dilate(left.astype(np.uint8), margen).astype(bool) & envelope
-    right = cv2.dilate(right.astype(np.uint8), margen).astype(bool) & envelope
-
-    mask = left | right
-    mask = binary_fill_holes(mask)
-    mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, _disk(5)).astype(bool)
-    mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, _disk(3)).astype(bool)
-
-    q = mask_quality(img, mask, body)
-    total_ok = FALLBACK_AREA_RANGE[0] <= q.area_fraction <= FALLBACK_AREA_RANGE[1]
-    if not total_ok or q.lr_balance < MIN_LR_BALANCE or q.contrast <= 0:
-        motivo = []
-        if not total_ok:
-            motivo.append(f"área={q.area_fraction:.2f}")
-        if q.lr_balance < MIN_LR_BALANCE:
-            motivo.append(f"balance={q.lr_balance:.2f}")
-        if q.contrast <= 0:
-            motivo.append("contraste<=0")
-        return _fallback_mask(img, body, ",".join(motivo))
-
+    if q.lr_balance < MIN_LR_BALANCE:
+        return _fallback_mask(img, f"balance: {q.lr_balance:.2f}")
     return mask, q
-
-
-STRICT_ERODE_PX: int = 12
-"""Erosión (px a 512) para obtener un campo pulmonar estricto."""
 
 
 def strict_lung_mask(mask: np.ndarray, erode_px: int = STRICT_ERODE_PX) -> np.ndarray:
@@ -352,13 +180,12 @@ def strict_lung_mask(mask: np.ndarray, erode_px: int = STRICT_ERODE_PX) -> np.nd
     m = cv2.erode(mask.astype(np.uint8), _disk(erode_px)).astype(bool)
     if not m.any():
         return mask.astype(bool)
-    # Conservar las dos componentes laterales principales.
     n, labels, stats, cent = cv2.connectedComponentsWithStats(
         m.astype(np.uint8), connectivity=8
     )
     if n <= 1:
         return m
-    h, w = mask.shape
+    w = mask.shape[1]
     candidatos = []
     for i in range(1, n):
         area = float(stats[i, cv2.CC_STAT_AREA])
@@ -412,4 +239,3 @@ def thorax_bbox(
     if x1 - x0 < 64 or y1 - y0 < 64:
         return None
     return x0, y0, x1, y1
-

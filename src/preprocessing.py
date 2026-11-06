@@ -40,12 +40,17 @@ Referencias
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional, Tuple
 
 import cv2
 import numpy as np
 
+from .config import INTENSITY_NORM
 from .lung_segmentation import (
     MaskQuality,
     SEG_SIZE,
@@ -55,6 +60,9 @@ from .lung_segmentation import (
 )
 
 IMG_SIZE: Tuple[int, int] = (256, 256)
+
+MASK_CACHE_DIR = Path(__file__).resolve().parents[1] / "data" / "masks"
+SEGMENTATION_VERSION = "pspnet_1.5.7_m12_q2"
 """Tamaño objetivo de la imagen preprocesada (ancho × alto)."""
 
 BF_D: int = 9
@@ -164,6 +172,20 @@ def apply_clahe(
     return clahe.apply(img)
 
 
+def _normalize_masked(img: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Estandariza la intensidad dentro de la máscara (media 0, σ 1, ±3σ)."""
+    if not mask.any():
+        return img
+    vals = img[mask].astype(np.float32)
+    mean, std = float(vals.mean()), float(vals.std())
+    if std < 1e-6:
+        return img
+    z = np.clip((img.astype(np.float32) - mean) / std, -3.0, 3.0)
+    out = img.copy()
+    out[mask] = ((z[mask] + 3.0) / 6.0 * 255.0).astype(np.uint8)
+    return out
+
+
 def segment_lungs(img: np.ndarray) -> np.ndarray:
     """Compatibilidad: segmenta a 512 y devuelve la máscara al tamaño de entrada."""
     h, w = img.shape[:2]
@@ -178,19 +200,56 @@ def segment_lungs(img: np.ndarray) -> np.ndarray:
 # Pipeline principal
 # ---------------------------------------------------------------------------
 
+def _cache_paths(path: str) -> tuple[Path, Path]:
+    st = os.stat(path)
+    key = hashlib.md5(
+        f"{SEGMENTATION_VERSION}|{path}|{st.st_size}|{st.st_mtime_ns}".encode()
+    ).hexdigest()
+    stem = Path(path).stem
+    return MASK_CACHE_DIR / f"{stem}_{key}.npy", MASK_CACHE_DIR / f"{stem}_{key}.json"
+
+
+def mask_cache_exists(path: str) -> bool:
+    mask_path, meta_path = _cache_paths(path)
+    return mask_path.exists() and meta_path.exists()
+
+
+def _segment_cached(path: str, img512: np.ndarray) -> tuple[np.ndarray, MaskQuality]:
+    """Segmenta con PSPNet y reutiliza la máscara si ya está en caché."""
+    mask_path, meta_path = _cache_paths(path)
+    if mask_path.exists() and meta_path.exists():
+        try:
+            mask = np.load(mask_path).astype(bool)
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            return mask, MaskQuality(**meta)
+        except (OSError, ValueError, TypeError):
+            pass
+
+    mask, quality = _segment_lungs_512(img512)
+    try:
+        MASK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        np.save(mask_path, mask.astype(np.uint8))
+        meta_path.write_text(
+            json.dumps(asdict(quality), ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError:
+        pass
+    return mask, quality
+
+
 def segment_image(path: str) -> tuple[Optional[np.ndarray], Optional[MaskQuality]]:
     """Carga y segmenta una imagen a 512×512."""
     img = load_grayscale(path)
     if img is None:
         return None, None
     img512 = cv2.resize(img, SEG_SIZE, interpolation=cv2.INTER_AREA)
-    mask, quality = _segment_lungs_512(img512)
-    return mask, quality
+    return _segment_cached(path, img512)
 
 
 def preprocess_with_mask(
     path: str,
     modo: str = "thorax",
+    intensity_norm: Optional[str] = None,
 ) -> Optional[tuple[np.ndarray, Optional[np.ndarray], Optional[MaskQuality]]]:
     """Preprocesa una imagen y devuelve ``(imagen, máscara, calidad)``.
 
@@ -199,6 +258,8 @@ def preprocess_with_mask(
     """
     if modo not in MODES:
         raise ValueError(f"Modo de preprocesamiento desconocido: {modo}")
+    if intensity_norm is None:
+        intensity_norm = INTENSITY_NORM
 
     if modo in ("strict", "strict_harmonized"):
         bundle = preprocess_bundle(path, include_strict=True)
@@ -212,13 +273,14 @@ def preprocess_with_mask(
         return None
 
     img512 = cv2.resize(img, SEG_SIZE, interpolation=cv2.INTER_AREA)
-    mask512, quality = _segment_lungs_512(img512)
 
     if modo == "full":
         out = resize_image(img512)
         out = apply_bilateral_filter(out)
         out = apply_clahe(out)
-        return out, None, quality
+        return out, None, None
+
+    mask512, quality = _segment_cached(path, img512)
 
     if modo == "context":
         # Imagen completa; la máscara es el fondo (fuera del campo torácico).
@@ -246,6 +308,8 @@ def preprocess_with_mask(
 
     out = apply_bilateral_filter(out)
     out = apply_clahe(out)
+    if intensity_norm == "zscore":
+        out = _normalize_masked(out, mask256)
 
     if modo == "mask":
         out = np.where(mask256, out, 0).astype(np.uint8)
@@ -266,7 +330,11 @@ def preprocess(path: str, modo: str = "thorax") -> Optional[np.ndarray]:
     return img
 
 
-def preprocess_bundle(path: str, include_strict: bool = False) -> Optional[dict]:
+def preprocess_bundle(
+    path: str,
+    include_strict: bool = False,
+    intensity_norm: Optional[str] = None,
+) -> Optional[dict]:
     """Segmenta una vez y devuelve las vistas ``thorax`` y ``context``.
 
     La vista estricta es opcional porque no se usa en el modelo principal y
@@ -283,7 +351,7 @@ def preprocess_bundle(path: str, include_strict: bool = False) -> Optional[dict]
         return None
 
     img512 = cv2.resize(img, SEG_SIZE, interpolation=cv2.INTER_AREA)
-    mask512, quality = _segment_lungs_512(img512)
+    mask512, quality = _segment_cached(path, img512)
     bbox = thorax_bbox(mask512)
     if bbox is None:
         bbox = (int(0.06 * 512), int(0.04 * 512), int(0.94 * 512), int(0.96 * 512))
@@ -297,6 +365,10 @@ def preprocess_bundle(path: str, include_strict: bool = False) -> Optional[dict]
         mask_crop.astype(np.uint8), IMG_SIZE, interpolation=cv2.INTER_NEAREST
     ).astype(bool)
     thorax = apply_clahe(apply_bilateral_filter(thorax))
+    if intensity_norm is None:
+        intensity_norm = INTENSITY_NORM
+    if intensity_norm == "zscore":
+        thorax = _normalize_masked(thorax, mask_thorax)
 
     # Vista pulmonar: exterior de la máscara relleno con la mediana pulmonar.
     # Elimina bordes del fondo y de la caja torácica sin recortar lesiones.

@@ -24,8 +24,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.lung_segmentation import SEG_SIZE, segment_lungs  # noqa: E402
-from src.preprocessing import preprocess_bundle  # noqa: E402
+from src.lung_segmentation import SEG_SIZE  # noqa: E402
+from src.preprocessing import preprocess_bundle, segment_image  # noqa: E402
 
 
 def main() -> None:
@@ -40,7 +40,7 @@ def main() -> None:
     if img is None:
         raise FileNotFoundError(f"No se pudo leer: {image_path}")
     img512 = cv2.resize(img, SEG_SIZE, interpolation=cv2.INTER_AREA)
-    mask, quality = segment_lungs(img512)
+    mask, quality = segment_image(str(image_path))
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

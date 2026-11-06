@@ -47,6 +47,11 @@ N_REGIONAL = 200
 # conserva y se aborda en el notebook 07 (class_weight / SMOTE).
 N_MODELO = None
 
+# Normalización de intensidad dentro de la máscara pulmonar.
+#   "zscore" -> media 0 y desviación 1 dentro del pulmón, recortado a ±3σ.
+#   "none"   -> intensidad original.
+INTENSITY_NORM = "zscore"
+
 # Protocolo de modelado.
 CV_OUTER = 5
 CV_INNER = 3

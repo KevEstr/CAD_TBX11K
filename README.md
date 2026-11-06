@@ -9,7 +9,8 @@ calibración de probabilidades y predicción con los modelos finales.
 
 ## Aportes
 
-- Segmentación pulmonar validada con las 1.211 cajas de lesión de TBX11K.
+- Segmentación pulmonar con PSPNet preentrenado (`torchxrayvision`) y validación
+  con las 1.211 cajas de lesión de TBX11K.
 - Características de **textura + HOG** calculadas sobre el campo pulmonar
   segmentado. HOG usa el exterior de la máscara relleno con la mediana pulmonar
   para no aprender el fondo ni la geometría del recorte.
@@ -30,7 +31,7 @@ cad-tbx11k/
 ├── src/
 │   ├── config.py              ← muestreo y protocolo
 │   ├── data.py                ← carga del dataset
-│   ├── lung_segmentation.py   ← segmentación pulmonar validada
+│   ├── lung_segmentation.py   ← segmentación pulmonar con PSPNet
 │   ├── preprocessing.py       ← recorte torácico y modos de preprocesamiento
 │   ├── features.py            ← textura, HOG, forma y contexto
 │   ├── selection.py           ← selectores Chi2, MI y RF
@@ -53,6 +54,7 @@ cad-tbx11k/
 │   ├── validate_segmentation.py ← validación con cajas de lesión
 │   ├── validate_masks.py        ← Dice/IoU contra máscaras manuales
 │   ├── preview_segmentation.py  ← control visual de la máscara
+│   ├── precompute_masks.py      ← caché de máscaras PSPNet
 │   └── predict.py               ← predicción individual o por lote
 ├── data/                        ← dataset y artefactos (excluido de Git)
 ├── models/                      ← modelos finales (excluido de Git)
@@ -104,15 +106,21 @@ cad-tbx11k/
 
 ### 1. Segmentación pulmonar (`src/lung_segmentation.py`)
 
-1. Máscara corporal por componentes oscuras conectadas al borde.
-2. Score de oscuridad local `gaussiano(σ=24) − imagen`.
-3. Separación izquierda/derecha y eliminación del mediastino central.
-4. Envolvente convexa y margen de 20 px para incluir opacidades y lesiones
-   periféricas.
-5. Control de calidad: área, balance, contraste y `fallback`.
+Se usa **PSPNet de `torchxrayvision`**, preentrenado para segmentación anatómica
+de tórax. El modelo devuelve las clases `Left Lung` y `Right Lung`; la máscara
+final es la unión de ambas, umbralizada y dilatada 12 px para incluir lesiones
+periféricas.
 
-La máscara es un campo pulmonar con margen, no una segmentación clínica de
-parénquima. Se valida con las cajas de lesión en el notebook 03.
+- La inferencia corre en CPU.
+- Las máscaras se guardan en `data/masks` para no recalcularlas.
+- La primera ejecución descarga los pesos del modelo en
+  `~/.torchxrayvision/models_data`.
+- Si el modelo no detecta pulmones, se usa un campo torácico central marcado con
+  `fallback=True` para no romper la extracción.
+
+La validación con las cajas de lesión está en `scripts/validate_segmentation.py`.
+La validación con máscaras manuales (Dice/IoU) está en
+`scripts/validate_masks.py`.
 
 ### 2. Preprocesamiento (`src/preprocessing.py`)
 
@@ -157,8 +165,14 @@ guardan para control de calidad, no como features.
 ```powershell
 python -m venv venv
 .\venv\Scripts\activate
+
+# PyTorch CPU (recomendado si no hay GPU)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 ```
+
+La primera segmentación descarga los pesos de PSPNet en
+`~/.torchxrayvision/models_data` (requiere internet una vez).
 
 El dataset debe descargarse en `data/TBX11K/` con la estructura
 `imgs/{health,sick,tb}` y las anotaciones COCO en
@@ -168,24 +182,19 @@ El dataset debe descargarse en `data/TBX11K/` con la estructura
 
 ## Reproducción
 
-```powershell
-# 1. Carga del dataset y DataFrame base
+`powershell
+# 1. Carga: genera df_base.csv y df_model.csv
 jupyter nbconvert --to notebook --execute notebooks/01_Carga_Datos.ipynb --inplace
 
-# 2. Metadatos de modelado (8.256 imágenes únicas)
-python scripts/build_model_meta.py
-
-# 3. Preprocesamiento y validación de segmentación
+# 2. Análisis exploratorio y preprocesamiento
+jupyter nbconvert --to notebook --execute notebooks/02_Analisis_Exploratorio.ipynb --inplace
 jupyter nbconvert --to notebook --execute notebooks/03_Preprocesamiento.ipynb --inplace
+jupyter nbconvert --to notebook --execute notebooks/04_Analisis_Regional.ipynb --inplace
 
-# 3b. Validación opcional contra máscaras manuales (Dice/IoU)
-python scripts/validate_masks.py --masks-dir ruta/a/mascaras
-
-# 3c. Control visual de una máscara
-python scripts/preview_segmentation.py --image ruta/a/radiografia.png --out-dir reports/seg
-
-# 4. Extracción de características, selección y desbalanceo
+# 3. Features con PSPNet + validación automática de máscaras
 jupyter nbconvert --to notebook --execute notebooks/05_Extraccion_Caracteristicas.ipynb --inplace
+
+# 4. Selección y desbalanceo
 jupyter nbconvert --to notebook --execute notebooks/06_Seleccion_Caracteristicas.ipynb --inplace
 jupyter nbconvert --to notebook --execute notebooks/07_Desbalanceo.ipynb --inplace
 
@@ -195,10 +204,16 @@ jupyter nbconvert --to notebook --execute notebooks/08_Modelos_ML.ipynb --inplac
 # 6. Evaluación e interpretabilidad
 jupyter nbconvert --to notebook --execute notebooks/09_Evaluacion_Comparativa.ipynb --inplace
 jupyter nbconvert --to notebook --execute notebooks/10_Interpretabilidad.ipynb --inplace
-```
+`
 
-Los notebooks 03 y 05–10 verifican sus artefactos y generan lo que falte cuando
-corresponde.
+El notebook 05 ejecuta la validación de segmentación con las máscaras cacheadas.
+Las herramientas de diagnóstico son opcionales:
+
+`powershell
+python scripts/validate_masks.py --masks-dir ruta/a/mascaras
+python scripts/preview_segmentation.py --image ruta/a/radiografia.png --out-dir reports/seg
+python scripts/precompute_masks.py   # opcional; acelera la primera corrida de 05
+`
 
 ### Predicción de una imagen
 
@@ -241,11 +256,10 @@ regeneran con `nbconvert` cuando se necesiten.
 
 ## Alcance y consideraciones
 
-- **Segmentación**: no hay máscaras manuales de pulmón en TBX11K; la validación
-  usa las cajas de lesión. La máscara principal es un campo pulmonar con margen,
-  no una segmentación clínica de parénquima. El prior vertical (2–82 % del cuerpo) y el margen de 20 px son heurísticos y deben validarse. Para medir precisión de la máscara
-  se incluye `scripts/validate_masks.py` (Dice/IoU contra un subconjunto
-  anotado manualmente).
+- **Segmentación**: se usa PSPNet preentrenado y las máscaras se dilatan 12 px
+  para incluir lesiones periféricas. TBX11K no tiene máscaras manuales de pulmón,
+  así que la validación principal usa las cajas de lesión. Para medir Dice/IoU
+  contra un subconjunto anotado manualmente se incluye `scripts/validate_masks.py`.
 - **Contexto de adquisición**: TBX11K presenta confusión entre clase y fuente.
   El modelo principal usa solo textura + HOG del campo pulmonar; el notebook 09
   incluye un baseline de fondo/borde para cuantificar ese sesgo.

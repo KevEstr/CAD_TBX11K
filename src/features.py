@@ -56,7 +56,7 @@ from skimage.feature import graycomatrix, graycoprops, hog, local_binary_pattern
 from skimage.filters import gabor as skimage_gabor
 from tqdm import tqdm
 
-from .config import INTENSITY_NORM
+from .config import FEATURE_MODE, INNER_ERODE_PX, INTENSITY_NORM
 from .preprocessing import IMG_SIZE, preprocess_bundle
 
 # ---------------------------------------------------------------------------
@@ -129,6 +129,69 @@ def model_feature_columns(
         return cols
     excluir = set(intensity_columns(features_df))
     return [c for c in cols if c not in excluir]
+
+
+def _normalize_mask(img: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Z-score dentro de una máscara, sin tocar el exterior."""
+    if not mask.any():
+        return img
+    vals = img[mask].astype(np.float32)
+    mean, std = float(vals.mean()), float(vals.std())
+    if std < 1e-6:
+        return img
+    z = np.clip((img.astype(np.float32) - mean) / std, -3.0, 3.0)
+    out = img.copy()
+    out[mask] = ((z[mask] + 3.0) / 6.0 * 255.0).astype(np.uint8)
+    return out
+
+
+def _texture_features(img: np.ndarray, mask: np.ndarray, prefix: str,
+                      include_gabor: bool = True) -> dict:
+    out = {}
+    fns = (feat_glcm, feat_lbp, feat_gabor) if include_gabor else (feat_glcm, feat_lbp)
+    for fn in fns:
+        out.update({f"{prefix}{k}": v for k, v in fn(img, mask).items()})
+    return out
+
+
+def extract_background_texture(image_path: str) -> Optional[dict]:
+    """GLCM/LBP del fondo, normalizados dentro de la máscara de fondo."""
+    bundle = preprocess_bundle(image_path, intensity_norm="none")
+    if bundle is None:
+        return None
+    img, mask = bundle["context"]
+    img = _normalize_mask(img, mask)
+    return _texture_features(img, mask, "bg_", include_gabor=False)
+
+
+def extract_interior_texture(image_path: str, erode_px: int = 8) -> Optional[dict]:
+    """GLCM/LBP/Gabor del interior pulmonar, sin el borde de la máscara."""
+    bundle = preprocess_bundle(image_path, intensity_norm=INTENSITY_NORM)
+    if bundle is None:
+        return None
+    img, mask = bundle["thorax"]
+    inner = _erode(mask, erode_px)
+    if not inner.any():
+        inner = mask
+    return _texture_features(_filled(img, inner), inner, "inner_")
+
+
+def extract_texture_variant(image_path: str, mode: str = "blur") -> Optional[dict]:
+    """Textura tras desenfoque o reducción de resolución (prueba de frecuencia)."""
+    bundle = preprocess_bundle(image_path, intensity_norm=INTENSITY_NORM)
+    if bundle is None:
+        return None
+    img, mask = bundle["thorax"]
+    if mode == "full":
+        pass
+    elif mode == "blur":
+        img = cv2.GaussianBlur(img, (5, 5), 1.5)
+    elif mode == "downsample":
+        small = cv2.resize(img, (128, 128), interpolation=cv2.INTER_AREA)
+        img = cv2.resize(small, (256, 256), interpolation=cv2.INTER_LINEAR)
+    else:
+        raise ValueError(f"Modo de variante desconocido: {mode}")
+    return _texture_features(_filled(img, mask), mask, f"{mode}_")
 
 
 # ---------------------------------------------------------------------------
@@ -450,17 +513,25 @@ def extract_features(
     img, mask = bundle["thorax"]
     quality = bundle["quality"]
 
+    if FEATURE_MODE == "inner_lung":
+        mask_textura = _erode(mask, INNER_ERODE_PX)
+        if not mask_textura.any():
+            mask_textura = mask
+    else:
+        mask_textura = mask
+    img_textura = _filled(img, mask_textura)
+
     row: dict = {"image_path": image_path, "class_name": class_name, "label": label}
-    row.update(feat_intensity_global(img, mask))
-    row.update(feat_intensity_regional(img, mask))
-    row.update(feat_glcm(img, mask))
-    row.update(feat_lbp(img, mask))
-    row.update(feat_gabor(img, mask))
-    lung_img = bundle["lung"][0]
+    row.update(feat_intensity_global(img_textura, mask_textura))
+    row.update(feat_intensity_regional(img_textura, mask_textura))
+    row.update(feat_glcm(img_textura, mask_textura))
+    row.update(feat_lbp(img_textura, mask_textura))
+    row.update(feat_gabor(img_textura, mask_textura))
+    hog_img = _filled(img, mask_textura)
     if include_hog:
-        row.update(feat_hog(lung_img))
+        row.update(feat_hog(hog_img))
     if include_phog:
-        row.update(feat_phog(lung_img))
+        row.update(feat_phog(hog_img))
     if include_shape:
         row.update(feat_shape(mask))
 

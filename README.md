@@ -55,6 +55,7 @@ cad-tbx11k/
 │   ├── validate_masks.py        ← Dice/IoU contra máscaras manuales
 │   ├── preview_segmentation.py  ← control visual de la máscara
 │   ├── precompute_masks.py      ← caché de máscaras PSPNet
+│   ├── evaluate_external.py     ← evaluación en un dataset externo
 │   └── predict.py               ← predicción individual o por lote
 ├── data/                        ← dataset y artefactos (excluido de Git)
 ├── models/                      ← modelos finales (excluido de Git)
@@ -140,7 +141,7 @@ El modo principal del modelo es `thorax`.
 |---|---:|---|
 | `texture` | 96 | intensidad global/regional, GLCM, LBP y Gabor dentro del pulmón |
 | `hog` | 1.764 | HOG 32×32, 7×7 bloques, calculado con la máscara rellena |
-| **Total del modelo** | **1.860** | textura + HOG |
+| **Total del modelo** | **1.832** | textura pura (68) + HOG (1.764) |
 
 `shape`, `context` y `quality` existen en `src/features.py` para análisis de
 sesgo, pero **no se usan** en la matriz principal del modelo. Las columnas
@@ -213,6 +214,7 @@ Las herramientas de diagnóstico son opcionales:
 python scripts/validate_masks.py --masks-dir ruta/a/mascaras
 python scripts/preview_segmentation.py --image ruta/a/radiografia.png --out-dir reports/seg
 python scripts/precompute_masks.py   # opcional; acelera la primera corrida de 05
+python scripts/evaluate_external.py --manifest ruta/manifest_externo.csv
 `
 
 ### Predicción de una imagen

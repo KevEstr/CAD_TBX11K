@@ -24,7 +24,7 @@
       "clf__max_depth": 6
     },
     "Random Forest": {
-      "clf__max_features": 0.2,
+      "clf__max_features": 0.1,
       "clf__min_samples_leaf": 10
     },
     "XGBoost": {

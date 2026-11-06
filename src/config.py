@@ -52,6 +52,12 @@ N_MODELO = None
 #   "none"   -> intensidad original.
 INTENSITY_NORM = "zscore"
 
+# Modo de textura del modelo principal.
+#   "inner_lung" -> textura y HOG dentro de la máscara erosionada, sin borde.
+#   "full_lung"  -> textura sobre la máscara completa.
+FEATURE_MODE = "inner_lung"
+INNER_ERODE_PX = 8
+
 # Protocolo de modelado.
 CV_OUTER = 5
 CV_INNER = 3

@@ -1840,6 +1840,7 @@
   ],
   "n_features": 1832,
   "intensity_norm": "zscore",
+  "feature_mode": "inner_lung",
   "excluded_intensity": true,
   "preprocessing": "recorte toracico segmentado + HOG enmascarado (mediana pulmonar)",
   "selector": {

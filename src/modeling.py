@@ -158,7 +158,7 @@ def make_pipeline(model_name: str, n_features: int, k: int) -> Pipeline:
             raise ImportError("xgboost no estÃ¡ instalado.")
         clf = XGBClassifier(
             random_state=42, n_jobs=1, eval_metric="logloss",
-            scale_pos_weight=9.32, tree_method="gpu_hist", device="cuda",
+            scale_pos_weight=9.32, tree_method="hist",
         )
     else:
         raise ValueError(f"Modelo desconocido: {model_name}")
@@ -404,7 +404,7 @@ def nested_cv(
         grid = get_param_grid(model_name)
         gs = GridSearchCV(
             pipe, grid, scoring="balanced_accuracy",
-            cv=inner_splits, n_jobs=1, refit=True,
+            cv=inner_splits, n_jobs=-1, refit=True,
         )
         gs.fit(X[tr], y[tr])
         best = gs.best_estimator_
@@ -415,7 +415,7 @@ def nested_cv(
         if nested_threshold:
             inner_proba = cross_val_predict(
                 clone(best), X[tr], y[tr], cv=inner_splits,
-                method="predict_proba", n_jobs=1,
+                method="predict_proba", n_jobs=-1,
             )[:, 1]
             thr = threshold_for_sensitivity(y[tr], inner_proba, target_sensitivity)
             nested_thr[te] = thr

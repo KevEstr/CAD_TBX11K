@@ -54,13 +54,13 @@
     "gabor_f0.4_t135_std"
   ],
   "best_params": {
-    "clf__C": 1.0,
+    "clf__C": 10.0,
     "clf__class_weight": "balanced",
     "clf__max_iter": 2000,
     "clf__solver": "lbfgs"
   },
-  "prevalence": 0.09689922480620156,
-  "threshold_youden": 0.080864,
-  "threshold_sens90": 2e-06,
+  "prevalence": 0.09668842156151801,
+  "threshold_youden": 0.0775,
+  "threshold_sens90": 0.040476,
   "note": "La selección y los hiperparámetros se ajustaron dentro de cada fold; el modelo final se reentrena con todos los datos."
 }

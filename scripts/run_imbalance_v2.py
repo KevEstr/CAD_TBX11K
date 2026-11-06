@@ -68,7 +68,7 @@ def main() -> None:
     for strategy in ["none", "balanced", "smote", "under", "over"]:
         print(">>>", strategy)
         res = cross_validate(make_pipeline(strategy), X, y, cv=cv,
-                             scoring=scoring, n_jobs=1)
+                             scoring=scoring, n_jobs=-1)
         row = {"strategy": strategy}
         for k in scoring:
             row[f"{k}_mean"] = float(np.mean(res[f"test_{k}"]))

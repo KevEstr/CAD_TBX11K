@@ -150,7 +150,7 @@ def fit_final(df, y, feature_set, model_name):
     gs = GridSearchCV(
         make_pipeline(model_name, X.shape[1], k),
         PARAM_GRIDS[model_name], scoring="balanced_accuracy",
-        cv=inner, n_jobs=1, refit=True,
+        cv=inner, n_jobs=-1, refit=True,
     )
     gs.fit(X, y)
     return gs.best_estimator_, cols, gs.best_params_

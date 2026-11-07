@@ -22,7 +22,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.lesion_patches import patch_features, sliding_patches  # noqa: E402
+from src.lesion_patches import background_patches, patch_features, sliding_patches  # noqa: E402
 from src.preprocessing import segment_image  # noqa: E402
 
 MODELS = ROOT / "models"
@@ -39,6 +39,10 @@ def main() -> None:
         (MODELS / "lesion_patch_manifest.json").read_text(encoding="utf-8")
     )
     modelo = joblib.load(MODELS / "lesion_patch.joblib")
+    bg_model = None
+    bg_path = MODELS / "background_patch.joblib"
+    if bg_path.exists():
+        bg_model = joblib.load(bg_path)
     feat_cols = list(manifest["feature_columns"])
     size = int(manifest["patch_size"])
     stride = int(manifest["patch_stride"])
@@ -72,9 +76,22 @@ def main() -> None:
         }
         for i in order
     ]
+    score_fondo = None
+    if bg_model is not None:
+        bg_scores = []
+        for patch in background_patches(img):
+            f = patch_features(patch)
+            bg_scores.append(
+                bg_model.predict_proba(
+                    np.asarray([[f[c] for c in feat_cols]], dtype=np.float32)
+                )[0, 1]
+            )
+        score_fondo = float(np.max(bg_scores)) if bg_scores else None
+
     resultado = {
         "imagen": args.image,
         "prob_tb": float(proba.max()),
+        "score_fondo": score_fondo,
         "prediccion": "tb" if proba.max() >= 0.5 else "no_tb",
         "n_parches": int(len(proba)),
         "top_parches": top,

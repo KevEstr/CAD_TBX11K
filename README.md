@@ -55,6 +55,11 @@ cad-tbx11k/
 │   ├── validate_masks.py        ← Dice/IoU contra máscaras manuales
 │   ├── preview_segmentation.py  ← control visual de la máscara
 │   ├── precompute_masks.py      ← caché de máscaras PSPNet
+│   ├── audit_views.py           ← comparación A/B/C/D
+│   ├── audit_acquisition.py     ← auditoría de adquisición
+│   ├── mitigate_shortcuts.py    ← M0/M1/M3 dentro de TBX11K
+│   ├── mitigate_augmentation.py ← M2: augmentation de adquisición
+│   ├── audit_sensitivity.py     ← sensibilidad a intervenciones
 │   ├── train_lesion_patches.py  ← especialista de parches de lesión
 │   ├── predict_lesion.py        ← predicción con parches de lesión
 │   ├── evaluate_external.py     ← evaluación en un dataset externo

@@ -57,7 +57,7 @@ from skimage.filters import gabor as skimage_gabor
 from tqdm import tqdm
 
 from .config import FEATURE_MODE, INNER_ERODE_PX, INTENSITY_NORM
-from .preprocessing import IMG_SIZE, preprocess_bundle
+from .preprocessing import IMG_SIZE, preprocess, preprocess_bundle
 
 # ---------------------------------------------------------------------------
 # Regiones anatómicas (6 zonas sobre la imagen de 256×256)

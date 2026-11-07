@@ -55,6 +55,8 @@ cad-tbx11k/
 │   ├── validate_masks.py        ← Dice/IoU contra máscaras manuales
 │   ├── preview_segmentation.py  ← control visual de la máscara
 │   ├── precompute_masks.py      ← caché de máscaras PSPNet
+│   ├── train_lesion_patches.py  ← especialista de parches de lesión
+│   ├── predict_lesion.py        ← predicción con parches de lesión
 │   ├── evaluate_external.py     ← evaluación en un dataset externo
 │   └── predict.py               ← predicción individual o por lote
 ├── data/                        ← dataset y artefactos (excluido de Git)

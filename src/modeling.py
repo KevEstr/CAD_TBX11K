@@ -89,6 +89,8 @@ PARAM_GRIDS: dict[str, dict] = {
 
 # Utilidades
 
+
+
 def columns_for_set(df: pd.DataFrame, feature_set: str) -> list[str]:
     """Devuelve las columnas de una familia lógica."""
     from .features import get_feature_groups

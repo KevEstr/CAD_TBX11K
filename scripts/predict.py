@@ -7,9 +7,6 @@ Uso:
 
 El CSV de lote debe tener una columna ``image_path``. Si además tiene
 ``label`` (0=health, 1=sick, 2=tb), se calculan métricas globales.
-
-El modelo se elige del manifiesto ``models/08_manifest.json``. Si no se indica
-``--model``, se usa el seleccionado por validación cruzada.
 """
 
 from __future__ import annotations

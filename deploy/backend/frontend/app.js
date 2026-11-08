@@ -6,6 +6,8 @@ let regionImageB64 = null;
 let occlusionB64 = null;
 let currentFile = null;
 let occlusionInterval = null;
+let occlusionStartedAt = null;
+const OCCLUSION_TIMEOUT_MS = 120000;
 
 const uploadZone = document.getElementById('upload-zone');
 const fileInput = document.getElementById('file-input');
@@ -260,6 +262,7 @@ function stopOcclusionPolling() {
     clearInterval(occlusionInterval);
     occlusionInterval = null;
   }
+  occlusionStartedAt = null;
 }
 
 function startOcclusionPolling(sid) {
@@ -268,6 +271,7 @@ function startOcclusionPolling(sid) {
   progressFill.style.width = '0%';
   progressPercent.textContent = '0%';
   progressText.textContent = 'Generando mapa de oclusión...';
+  occlusionStartedAt = Date.now();
 
   fetch('/api/v1/predict/' + sid + '/occlude', { method: 'POST' }).catch(() => {});
 
@@ -277,14 +281,32 @@ function startOcclusionPolling(sid) {
       const data = await resp.json();
       if (data.status === 'complete') {
         stopOcclusionPolling();
+        if (!data.result || data.result.status === 'error') {
+          progressPercent.textContent = '—';
+          progressText.textContent = 'No se pudo generar el mapa de oclusión.';
+          cleanupSession();
+          return;
+        }
         onOcclusionComplete(data.result);
-        cleanupSession();
       } else if (data.status === 'processing' && data.progress) {
         const progress = data.progress;
         const percent = Math.round((progress.current / progress.total) * 100);
         progressFill.style.width = percent + '%';
         progressPercent.textContent = percent + '%';
         progressText.textContent = 'Procesando región ' + progress.current + ' de ' + progress.total;
+      } else if (data.status === 'not_started') {
+        stopOcclusionPolling();
+        progressPercent.textContent = '—';
+        progressText.textContent = 'El mapa de oclusión no está disponible para esta sesión.';
+        cleanupSession();
+        return;
+      }
+
+      if (occlusionStartedAt && Date.now() - occlusionStartedAt > OCCLUSION_TIMEOUT_MS) {
+        stopOcclusionPolling();
+        progressPercent.textContent = '—';
+        progressText.textContent = 'El mapa de oclusión tardó demasiado. Vuelve a analizar la imagen.';
+        cleanupSession();
       }
     } catch (e) {
       // Reintentar en el siguiente ciclo.
@@ -296,8 +318,11 @@ function onOcclusionComplete(res) {
   stopOcclusionPolling();
   progressFill.style.width = '100%';
   progressPercent.textContent = '100%';
-  progressText.textContent = 'Mapa de oclusión generado en ' + (res.time_ms / 1000).toFixed(1) + ' s';
-  if (res.overlay) {
+  const elapsed = res && typeof res.time_ms === 'number'
+    ? 'Mapa de oclusión generado en ' + (res.time_ms / 1000).toFixed(1) + ' s'
+    : 'Mapa de oclusión generado.';
+  progressText.textContent = elapsed;
+  if (res && res.overlay) {
     occlusionB64 = res.overlay;
     overlaySelect.options[1].disabled = false;
     overlaySelect.value = 'occlusion';
@@ -335,6 +360,7 @@ function showError(message) {
   errorSection.hidden = false;
   setState('IDLE');
 }
+
 
 
 

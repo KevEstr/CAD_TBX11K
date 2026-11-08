@@ -1,0 +1,97 @@
+"""
+cad_tbx11k
+==========
+Framework de análisis exploratorio, segmentación, preprocesamiento y
+extracción de características para el dataset TBX11K de radiografías
+torácicas de tuberculosis.
+
+Módulos
+-------
+config            : variables de muestreo y protocolo compartidas.
+data              : carga del dataset y construcción del DataFrame base.
+lung_segmentation : segmentación pulmonar con PSPNet preentrenado.
+preprocessing     : recorte torácico + Bilateral Filter + CLAHE.
+features          : textura, HOG, forma y contexto (con soporte de máscara).
+modeling          : CV anidada, métricas, calibración y McNemar.
+visualization     : figuras de publicación.
+
+Uso rápido
+----------
+>>> from src.preprocessing import preprocess_with_mask
+>>> from src.features import extract_features, get_feature_groups
+>>> from src.modeling import nested_cv, binary_metrics
+"""
+
+from .config import (
+    N_MUESTRA,
+    N_INTENSIDAD,
+    N_SEGUIMIENTO,
+    N_REGIONAL,
+    N_MODELO,
+    CV_OUTER,
+    CV_INNER,
+    RANDOM_STATE,
+    TARGET_SENSITIVITY,
+)
+
+from .data import (
+    LABEL_MAP,
+    PALETTE,
+    VALID_EXTS,
+    setup_kaggle_credentials,
+    download_dataset,
+    get_data_root,
+    map_dataset_structure,
+    build_base_dataframe,
+)
+
+from .lung_segmentation import (
+    MaskQuality,
+    segment_lungs as segment_lungs_512,
+    thorax_bbox,
+)
+
+from .preprocessing import (
+    IMG_SIZE,
+    MODES,
+    preprocess,
+    preprocess_steps,
+    preprocess_with_mask,
+    preprocess_bundle,
+    apply_bilateral_filter,
+    apply_clahe,
+)
+
+from .features import (
+    REGIONS,
+    extract_features,
+    extract_all_features,
+    verify_extractors,
+    get_feature_groups,
+    model_feature_columns,
+    print_feature_summary,
+)
+
+from .visualization import (
+    set_publication_style,
+    plot_dataset_distribution,
+    plot_image_metadata,
+    plot_sample_images,
+    plot_intensity_histograms,
+    compute_intensity_stats,
+    plot_intensity_metrics,
+    plot_preprocessing_steps,
+    plot_histogram_comparison,
+    build_preprocessing_stats_table,
+    plot_regions_on_images,
+    compute_regional_stats,
+    plot_regional_heatmap,
+    plot_regional_distributions,
+    build_regional_comparison_table,
+    plot_glcm_distributions,
+    plot_lbp_histograms,
+    plot_feature_summary_table,
+)
+
+__version__ = "3.0.0"
+__author__ = "CAD-TBX11K Pipeline"

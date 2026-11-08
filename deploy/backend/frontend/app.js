@@ -106,7 +106,7 @@ function resetUI() {
   progressPercent.textContent = '0%';
   overlayLegend.hidden = true;
   overlaySelect.value = 'regions';
-  overlaySelect.options[2].disabled = true;
+  overlaySelect.options[1].disabled = true;
   fileInput.value = '';
   if (previewImg.src.indexOf('blob:') === 0) {
     URL.revokeObjectURL(previewImg.src);
@@ -118,6 +118,8 @@ btnAnalyze.addEventListener('click', async () => {
   if (!currentFile) return;
   stopOcclusionPolling();
   cleanupSession();
+  occlusionB64 = null;
+  overlaySelect.options[1].disabled = true;
   setState('WAITING');
   btnAnalyze.disabled = true;
   loadingSection.hidden = false;
@@ -297,7 +299,7 @@ function onOcclusionComplete(res) {
   progressText.textContent = 'Mapa de oclusión generado en ' + (res.time_ms / 1000).toFixed(1) + ' s';
   if (res.overlay) {
     occlusionB64 = res.overlay;
-    overlaySelect.options[2].disabled = false;
+    overlaySelect.options[1].disabled = false;
     overlaySelect.value = 'occlusion';
     currentOverlay = 'occlusion';
     overlayLegend.hidden = false;
@@ -333,5 +335,6 @@ function showError(message) {
   errorSection.hidden = false;
   setState('IDLE');
 }
+
 
 

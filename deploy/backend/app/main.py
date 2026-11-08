@@ -21,6 +21,7 @@ from app.config import (
 )
 from app.inference import InferencePipeline
 from app.explainer import RadiographExplainer
+from src.lung_segmentation import warmup_segmentation
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -65,6 +66,12 @@ async def lifespan(app: FastAPI):
             "Model loaded successfully (%s)",
             pipeline.manifest.get("seleccionado_cv"),
         )
+        logger.info("Warming up segmentation model...")
+        try:
+            warmup_segmentation()
+            logger.info("Segmentation model ready")
+        except Exception as e:
+            logger.warning("Segmentation warmup failed: %s", e)
     except Exception as e:
         logger.error("Failed to load model: %s", e)
         raise

@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from src.features import extract_features
+from src.features import extract_features_from_bundle
 from src.preprocessing import preprocess_bundle
 
 
@@ -62,9 +62,10 @@ class RadiographExplainer:
         bundle = preprocess_bundle(original_path)
         if bundle is None:
             raise RuntimeError("preprocess_bundle returned None")
-        img_256, _ = bundle["thorax"]
+        img_256, mask_256 = bundle["thorax"]
+        quality = bundle["quality"]
 
-        base_prob = self._predict_tb(original_path)
+        base_prob = self._predict_tb_from_bundle(bundle, original_path)
         g = 6
         cuts = np.linspace(0, 256, g + 1).astype(int)
         heatmap = [[0.0] * g for _ in range(g)]
@@ -78,31 +79,27 @@ class RadiographExplainer:
                 x0, x1 = int(cuts[gx]), int(cuts[gx + 1])
                 occ = img_256.copy()
                 occ[y0:y1, x0:x1] = fill
-                occ_path = Path(temp_dir) / f"occ_{gy}_{gx}.png"
-                import cv2
-                ok = cv2.imwrite(str(occ_path), occ)
-                if not ok:
-                    raise RuntimeError("No se pudo escribir la celda de oclusion")
                 try:
-                    prob_occ = self._predict_tb(str(occ_path))
+                    prob_occ = self._predict_tb_from_bundle(
+                        {"thorax": (occ, mask_256), "quality": quality},
+                        original_path,
+                    )
                     heatmap[gy][gx] = round(max(base_prob - prob_occ, 0.0), 6)
                 except Exception:
                     heatmap[gy][gx] = 0.0
-                finally:
-                    occ_path.unlink(missing_ok=True)
 
                 progress_dict[session_id] = {
                     "current": gy * g + gx + 1,
                     "total": g * g,
-                    "detail": f"Celda ({gy},{gx})",
+                    "detail": f"Región ({gy},{gx})",
                 }
 
         overlay_b64 = self._render_occlusion_overlay(img_256, heatmap)
         return heatmap, overlay_b64, time.time() - t0
 
-    def _predict_tb(self, path: str) -> float:
-        row = extract_features(
-            path, label=0, class_name="x",
+    def _predict_tb_from_bundle(self, bundle: dict, image_path: str = "") -> float:
+        row = extract_features_from_bundle(
+            bundle, image_path=image_path, label=0, class_name="x",
             include_context=False, include_shape=False,
         )
         if row is None:

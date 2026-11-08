@@ -63,11 +63,19 @@ def _get_model():
                 "La segmentación requiere torch, torchvision y torchxrayvision. "
                 "Instala con: pip install torch torchvision torchxrayvision"
             ) from exc
-        torch.set_num_threads(max(1, os.cpu_count() or 1))
+        threads = int(
+            os.environ.get("TORCH_NUM_THREADS", max(1, os.cpu_count() or 1))
+        )
+        torch.set_num_threads(max(1, threads))
         model = xrv.baseline_models.chestx_det.PSPNet()
         model.eval()
         _MODEL = model
     return _MODEL
+
+
+def warmup_segmentation() -> None:
+    """Carga PSPNet antes del primer request."""
+    _get_model()
 
 
 def _fallback_mask(img: np.ndarray, reason: str) -> tuple[np.ndarray, MaskQuality]:

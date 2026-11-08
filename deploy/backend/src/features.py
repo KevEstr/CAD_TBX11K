@@ -490,23 +490,21 @@ def feat_context(img: np.ndarray, context_mask: np.ndarray) -> dict:
 # Extracción por imagen
 # ---------------------------------------------------------------------------
 
-def extract_features(
-    image_path: str,
-    label: int,
-    class_name: str,
+def extract_features_from_bundle(
+    bundle: Optional[dict],
+    image_path: str = "",
+    label: int = 0,
+    class_name: str = "x",
     include_hog: bool = True,
     include_phog: bool = False,
     include_context: bool = True,
     include_shape: bool = True,
 ) -> Optional[dict]:
-    """Extrae todas las familias de características para una imagen.
+    """Extrae características desde un bundle ya preprocesado.
 
-    La textura usa la máscara pulmonar como soporte. HOG se calcula sobre la
-    vista ``lung`` (exterior relleno con la mediana pulmonar) para no introducir
-    bordes del fondo ni la geometría del recorte. El contexto se extrae de la
-    imagen completa con la máscara de fondo.
+    Permite reutilizar la segmentación y el preprocesamiento en tareas que
+    evalúan muchas variantes de la misma imagen, como el mapa de oclusión.
     """
-    bundle = preprocess_bundle(image_path, intensity_norm=INTENSITY_NORM)
     if bundle is None:
         return None
 
@@ -546,6 +544,35 @@ def extract_features(
         ctx_img, ctx_mask = bundle["context"]
         row.update(feat_context(ctx_img, ctx_mask))
     return row
+
+
+def extract_features(
+    image_path: str,
+    label: int,
+    class_name: str,
+    include_hog: bool = True,
+    include_phog: bool = False,
+    include_context: bool = True,
+    include_shape: bool = True,
+) -> Optional[dict]:
+    """Extrae todas las familias de características para una imagen.
+
+    La textura usa la máscara pulmonar como soporte. HOG se calcula sobre la
+    vista ``lung`` (exterior relleno con la mediana pulmonar) para no introducir
+    bordes del fondo ni la geometría del recorte. El contexto se extrae de la
+    imagen completa con la máscara de fondo.
+    """
+    bundle = preprocess_bundle(image_path, intensity_norm=INTENSITY_NORM)
+    return extract_features_from_bundle(
+        bundle,
+        image_path=image_path,
+        label=label,
+        class_name=class_name,
+        include_hog=include_hog,
+        include_phog=include_phog,
+        include_context=include_context,
+        include_shape=include_shape,
+    )
 
 
 def extract_all_features(

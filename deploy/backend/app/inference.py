@@ -10,7 +10,7 @@ from app.config import (
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-from src.features import extract_features
+from src.features import extract_features, extract_features_from_bundle
 from src.preprocessing import preprocess_bundle
 
 
@@ -32,11 +32,17 @@ class InferencePipeline:
             if umbral.get("modelo") == self.manifest.get("seleccionado_cv"):
                 self.threshold = float(umbral.get("threshold_youden", TB_THRESHOLD))
 
-    def extract(self, image_path: str) -> np.ndarray:
-        row = extract_features(
-            image_path, label=0, class_name="x",
-            include_context=False, include_shape=False,
-        )
+    def extract(self, image_path: str, bundle: dict = None) -> np.ndarray:
+        if bundle is None:
+            row = extract_features(
+                image_path, label=0, class_name="x",
+                include_context=False, include_shape=False,
+            )
+        else:
+            row = extract_features_from_bundle(
+                bundle, image_path=image_path, label=0, class_name="x",
+                include_context=False, include_shape=False,
+            )
         if row is None:
             raise RuntimeError("extract_features returned None")
         return np.array([row[k] for k in self.feat_cols], dtype=np.float64).reshape(1, -1)
@@ -50,7 +56,7 @@ class InferencePipeline:
             raise RuntimeError("preprocess_bundle returned None")
         img_thorax, mask_thorax = bundle["thorax"]
 
-        vec = self.extract(str(original_path))
+        vec = self.extract(str(original_path), bundle=bundle)
         proba = np.asarray(self.pipeline.predict_proba(vec))[0]
         pred_id = int(np.argmax(proba))
         idx_tb = self.class_names.index("tb")

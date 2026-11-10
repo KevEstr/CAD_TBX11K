@@ -81,28 +81,37 @@ data/TBX11K/
     └── json/
 ```
 
-## Reproducir los experimentos
+## Cómo ejecutar los notebooks
 
-Ejecuta los notebooks en orden desde la raíz del repositorio:
+La reproducción del proyecto se realiza desde **Jupyter Notebook**. No es necesario ejecutar los notebooks mediante comandos `nbconvert`.
 
-```powershell
-jupyter nbconvert --to notebook --execute notebooks/01_Carga_Datos.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/02_Analisis_Exploratorio.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/03_Preprocesamiento.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/04_Analisis_Regional.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/05_Extraccion_Caracteristicas.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/06_Seleccion_Caracteristicas.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/07_Desbalanceo.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/08_Modelos_ML.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/09_Evaluacion_Comparativa.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/10_Interpretabilidad.ipynb --inplace
-```
+1. Abre una terminal en la carpeta raíz del repositorio.
+2. Activa el entorno virtual e inicia Jupyter Notebook:
 
-El notebook 05 utiliza las máscaras cacheadas y ejecuta la validación de segmentación. Para generar las máscaras antes de la extracción de características, puede utilizarse:
+   ```powershell
+   .\\venv\\Scripts\\activate
+   jupyter notebook
+   ```
 
-```powershell
-python scripts/precompute_masks.py
-```
+3. En la interfaz de Jupyter, abre la carpeta `notebooks/`.
+4. Abre los archivos y ejecuta sus celdas en orden, desde la primera hasta la última. Espera a que cada notebook termine antes de pasar al siguiente.
+
+Sigue este orden para mantener la secuencia de generación de datos y artefactos:
+
+| Orden | Notebook | Etapa |
+|---:|---|---|
+| 1 | `01_Carga_Datos.ipynb` | Carga y preparación de datos |
+| 2 | `02_Analisis_Exploratorio.ipynb` | Análisis exploratorio |
+| 3 | `03_Preprocesamiento.ipynb` | Preprocesamiento |
+| 4 | `04_Analisis_Regional.ipynb` | Análisis regional |
+| 5 | `05_Extraccion_Caracteristicas.ipynb` | Segmentación y extracción de características |
+| 6 | `06_Seleccion_Caracteristicas.ipynb` | Selección de características |
+| 7 | `07_Desbalanceo.ipynb` | Tratamiento del desbalanceo |
+| 8 | `08_Modelos_ML.ipynb` | Entrenamiento de clasificadores |
+| 9 | `09_Evaluacion_Comparativa.ipynb` | Evaluación comparativa |
+| 10 | `10_Interpretabilidad.ipynb` | Interpretabilidad |
+
+El notebook 05 utiliza las máscaras cacheadas y ejecuta la validación de segmentación. Si necesitas generarlas previamente, ejecuta `scripts/precompute_masks.py` desde una terminal, como se indica en la sección de herramientas auxiliares.
 
 ## Usar el CAD desde la línea de comandos
 

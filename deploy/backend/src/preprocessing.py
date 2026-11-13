@@ -390,6 +390,7 @@ def preprocess_bundle(
         "context": (context, mask_context),
         "quality": quality,
         "bbox": bbox,
+        "mask512": mask512,
     }
 
     if include_strict:

@@ -4,6 +4,7 @@ let currentOverlay = 'regions';
 let baseImageB64 = null;
 let regionImageB64 = null;
 let occlusionB64 = null;
+let segmentationB64 = null;
 let currentFile = null;
 let occlusionInterval = null;
 let occlusionStartedAt = null;
@@ -27,6 +28,8 @@ const progressPercent = document.getElementById('progress-percent');
 const progressText = document.getElementById('progress-text');
 const overlaySelect = document.getElementById('overlay-select');
 const overlayLegend = document.getElementById('overlay-legend');
+const viewNote = document.getElementById('view-note');
+const viewerTitle = document.getElementById('viewer-title');
 const imageCanvas = document.getElementById('image-canvas');
 const canvasCtx = imageCanvas.getContext('2d');
 
@@ -37,10 +40,55 @@ const classLabels = {
 };
 
 const classNotes = {
-  health: 'La probabilidad de tuberculosis no supera el umbral operativo. La clase dominante corresponde a normalidad.',
-  sick: 'La probabilidad de tuberculosis no supera el umbral operativo. La clase dominante corresponde a otra enfermedad.',
-  tb: 'La probabilidad estimada de tuberculosis supera el umbral operativo del modelo.',
+  health: 'La probabilidad de tuberculosis es baja: no supera el nivel que el modelo usa para alertar. El resultado corresponde a normalidad.',
+  sick: 'La probabilidad de tuberculosis es baja: no supera el nivel que el modelo usa para alertar. El resultado corresponde a otra enfermedad.',
+  tb: 'La probabilidad estimada de tuberculosis es alta: supera el nivel que el modelo usa para alertar.',
 };
+
+function friendlyFamily(name) {
+  const key = String(name).toLowerCase();
+  if (key.includes('hog')) return 'Formas y bordes';
+  if (key.includes('textur')) return 'Textura';
+  return 'Otras características';
+}
+
+function friendlyGroup(name) {
+  const key = String(name).toLowerCase();
+  if (key.includes('hog')) return 'Formas';
+  if (key.includes('textur')) return 'Textura';
+  return 'Otras';
+}
+
+const featureTerms = {
+  contrast: 'contraste',
+  entropy: 'entropía',
+  homogeneity: 'homogeneidad',
+  energy: 'energía',
+  correlation: 'correlación',
+  dissimilarity: 'disimilitud',
+  mean: 'media',
+  std: 'desviación',
+  skew: 'asimetría',
+  kurtosis: 'curtosis',
+};
+
+function friendlyFeature(name) {
+  const raw = String(name);
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('hog_')) {
+    return 'Formas y bordes · ' + raw.slice(4).replace(/_/g, '-');
+  }
+  if (lower.startsWith('glcm_') || lower.startsWith('lbp_') || lower.startsWith('gabor_')) {
+    const prefix = lower.startsWith('glcm_') ? 5 : (lower.startsWith('lbp_') ? 4 : 6);
+    const suffix = raw.slice(prefix).split('_').map((part) => featureTerms[part] || part).join(' ');
+    return 'Textura · ' + suffix;
+  }
+  if (lower.startsWith('intensity_')) {
+    const suffix = raw.slice(10).split('_').map((part) => featureTerms[part] || part).join(' ');
+    return 'Intensidad · ' + suffix;
+  }
+  return raw.replace(/_/g, ' ');
+}
 
 uploadZone.addEventListener('click', () => fileInput.click());
 uploadZone.addEventListener('keydown', (event) => {
@@ -89,6 +137,11 @@ function handleFile(file) {
   state = 'SENDING';
 }
 
+function setViewOption(value, disabled) {
+  const option = overlaySelect.querySelector('option[value="' + value + '"]');
+  if (option) option.disabled = disabled;
+}
+
 function resetUI() {
   stopOcclusionPolling();
   cleanupSession();
@@ -96,8 +149,10 @@ function resetUI() {
   sessionId = null;
   currentFile = null;
   occlusionB64 = null;
+  segmentationB64 = null;
   baseImageB64 = null;
   regionImageB64 = null;
+  currentOverlay = 'regions';
   uploadZone.hidden = false;
   previewSection.hidden = true;
   loadingSection.hidden = true;
@@ -108,7 +163,8 @@ function resetUI() {
   progressPercent.textContent = '0%';
   overlayLegend.hidden = true;
   overlaySelect.value = 'regions';
-  overlaySelect.options[1].disabled = true;
+  setViewOption('segmentation', true);
+  setViewOption('occlusion', true);
   fileInput.value = '';
   if (previewImg.src.indexOf('blob:') === 0) {
     URL.revokeObjectURL(previewImg.src);
@@ -121,7 +177,10 @@ btnAnalyze.addEventListener('click', async () => {
   stopOcclusionPolling();
   cleanupSession();
   occlusionB64 = null;
-  overlaySelect.options[1].disabled = true;
+  segmentationB64 = null;
+  currentOverlay = 'regions';
+  setViewOption('segmentation', true);
+  setViewOption('occlusion', true);
   setState('WAITING');
   btnAnalyze.disabled = true;
   loadingSection.hidden = false;
@@ -191,9 +250,11 @@ function renderResults(data) {
   document.getElementById('meta-latency').textContent = latency >= 1000
     ? (latency / 1000).toFixed(1) + ' s'
     : Math.round(latency) + ' ms';
-  document.getElementById('model-meta').textContent = 'Textura y HOG · segmentación PSPNet';
+  document.getElementById('model-meta').textContent = 'La regresión logística combina textura y formas de la imagen para estimar la probabilidad.';
 
-  baseImageB64 = data.image_base64;
+  baseImageB64 = previewImg.src || data.image_base64;
+  segmentationB64 = data.segmentation_base64 || null;
+  if (segmentationB64) setViewOption('segmentation', false);
 
   const regionsContainer = document.getElementById('regions-list');
   const featuresContainer = document.getElementById('features-list');
@@ -205,12 +266,12 @@ function renderResults(data) {
     for (const name of Object.keys(families)) {
       const value = families[name];
       regionsContainer.innerHTML += '<div class="region-item"><span class="region-name">' +
-        escapeHtml(name) + '</span><div class="region-bar"><div class="region-fill" style="width:' +
+        escapeHtml(friendlyFamily(name)) + '</span><div class="region-bar"><div class="region-fill" style="width:' +
         (value * 100) + '%"></div></div><span class="region-val">' +
         (value * 100).toFixed(1) + '%</span></div>';
     }
   } else {
-    regionsContainer.innerHTML = '<p class="empty-note">Explicabilidad no disponible para esta imagen.</p>';
+    regionsContainer.innerHTML = '<p class="empty-note">No hay información de influencia para esta imagen.</p>';
   }
 
   if (data.level1 && data.level1.top_features.length) {
@@ -220,16 +281,16 @@ function renderResults(data) {
       const sign = increases ? '+' : '−';
       featuresContainer.innerHTML += '<div class="feature-item">' +
         '<span class="fi-index">' + String(index + 1).padStart(2, '0') + '</span>' +
-        '<span class="fi-name" title="' + escapeHtml(feature.name) + '">' + escapeHtml(feature.name) + '</span>' +
-        '<span class="fi-group">' + escapeHtml(feature.group) + '</span>' +
+        '<span class="fi-name" title="' + escapeHtml(feature.name) + '">' + escapeHtml(friendlyFeature(feature.name)) + '</span>' +
+        '<span class="fi-group">' + escapeHtml(friendlyGroup(feature.group)) + '</span>' +
         '<span class="fi-val ' + directionClass + '">' + sign + feature.importance.toFixed(3) + '</span>' +
         '</div>';
     });
   } else {
-    featuresContainer.innerHTML = '<p class="empty-note">No hay variables explicativas disponibles.</p>';
+    featuresContainer.innerHTML = '<p class="empty-note">No hay características destacadas para mostrar.</p>';
   }
 
-  regionImageB64 = data.image_base64;
+  regionImageB64 = baseImageB64;
 
   currentOverlay = 'regions';
   overlaySelect.value = 'regions';
@@ -237,16 +298,53 @@ function renderResults(data) {
   drawOverlay('regions');
 }
 
+const viewTitles = {
+  regions: 'Radiografía cargada',
+  segmentation: 'Segmentación pulmonar',
+  occlusion: 'Zonas que afectan la probabilidad de tuberculosis',
+};
+
+const viewNotes = {
+  regions: 'La radiografía tal como la cargaste.',
+  segmentation: 'Zona pulmonar detectada por el modelo. El contorno y el tinte marcan los pulmones.',
+  occlusion: 'Zonas que más cambian la probabilidad estimada de tuberculosis al ocultarse.',
+};
+
 function drawOverlay(mode) {
   if (!baseImageB64) return;
+  if (viewNote) viewNote.textContent = viewNotes[mode] || '';
+  if (viewerTitle) viewerTitle.textContent = viewTitles[mode] || '';
   let src = baseImageB64;
   if (mode === 'regions' && regionImageB64) src = regionImageB64;
+  else if (mode === 'segmentation' && segmentationB64) src = segmentationB64;
   else if (mode === 'occlusion' && occlusionB64) src = occlusionB64;
 
   const img = new Image();
   img.onload = () => {
-    canvasCtx.clearRect(0, 0, 512, 512);
-    canvasCtx.drawImage(img, 0, 0, 512, 512);
+    const isOcclusion = mode === 'occlusion';
+    const natural = Math.max(img.naturalWidth, img.naturalHeight);
+    const size = isOcclusion ? 600 : Math.min(1024, Math.max(natural, 512));
+    imageCanvas.width = size;
+    imageCanvas.height = size;
+    canvasCtx.clearRect(0, 0, size, size);
+
+    if (isOcclusion) {
+      canvasCtx.drawImage(img, 0, 0, size, size);
+      return;
+    }
+
+    canvasCtx.fillStyle = '#e3ddcf';
+    canvasCtx.fillRect(0, 0, size, size);
+    const scale = Math.min(size / img.naturalWidth, size / img.naturalHeight);
+    const drawWidth = img.naturalWidth * scale;
+    const drawHeight = img.naturalHeight * scale;
+    canvasCtx.drawImage(
+      img,
+      (size - drawWidth) / 2,
+      (size - drawHeight) / 2,
+      drawWidth,
+      drawHeight,
+    );
   };
   img.src = src;
 }
@@ -270,7 +368,7 @@ function startOcclusionPolling(sid) {
   progressCard.hidden = false;
   progressFill.style.width = '0%';
   progressPercent.textContent = '0%';
-  progressText.textContent = 'Generando mapa de oclusión...';
+  progressText.textContent = 'Calculando las zonas que más afectan la probabilidad de tuberculosis...';
   occlusionStartedAt = Date.now();
 
   fetch('/api/v1/predict/' + sid + '/occlude', { method: 'POST' }).catch(() => {});
@@ -283,7 +381,7 @@ function startOcclusionPolling(sid) {
         stopOcclusionPolling();
         if (!data.result || data.result.status === 'error') {
           progressPercent.textContent = '—';
-          progressText.textContent = 'No se pudo generar el mapa de oclusión.';
+          progressText.textContent = 'No se pudo calcular el mapa de zonas influyentes.';
           cleanupSession();
           return;
         }
@@ -297,7 +395,7 @@ function startOcclusionPolling(sid) {
       } else if (data.status === 'not_started') {
         stopOcclusionPolling();
         progressPercent.textContent = '—';
-        progressText.textContent = 'El mapa de oclusión no está disponible para esta sesión.';
+        progressText.textContent = 'El mapa de zonas influyentes no está disponible para esta sesión.';
         cleanupSession();
         return;
       }
@@ -305,7 +403,7 @@ function startOcclusionPolling(sid) {
       if (occlusionStartedAt && Date.now() - occlusionStartedAt > OCCLUSION_TIMEOUT_MS) {
         stopOcclusionPolling();
         progressPercent.textContent = '—';
-        progressText.textContent = 'El mapa de oclusión tardó demasiado. Vuelve a analizar la imagen.';
+        progressText.textContent = 'El mapa de zonas influyentes tardó demasiado. Vuelve a analizar la imagen.';
         cleanupSession();
       }
     } catch (e) {
@@ -319,16 +417,13 @@ function onOcclusionComplete(res) {
   progressFill.style.width = '100%';
   progressPercent.textContent = '100%';
   const elapsed = res && typeof res.time_ms === 'number'
-    ? 'Mapa de oclusión generado en ' + (res.time_ms / 1000).toFixed(1) + ' s'
-    : 'Mapa de oclusión generado.';
+    ? 'Mapa de zonas influyentes generado en ' + (res.time_ms / 1000).toFixed(1) + ' s'
+    : 'Mapa de zonas influyentes generado.';
   progressText.textContent = elapsed;
   if (res && res.overlay) {
     occlusionB64 = res.overlay;
-    overlaySelect.options[1].disabled = false;
-    overlaySelect.value = 'occlusion';
-    currentOverlay = 'occlusion';
-    overlayLegend.hidden = false;
-    drawOverlay('occlusion');
+    setViewOption('occlusion', false);
+    progressText.textContent = elapsed + ' Puedes verlo en el selector "Vista".';
   }
   setState('COMPLETE');
   cleanupSession();

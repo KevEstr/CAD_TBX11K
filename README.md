@@ -3,7 +3,7 @@
 Pipeline de análisis, segmentación pulmonar y modelado sobre **TBX11K** para un
 sistema de apoyo al diagnóstico (CAD) de tuberculosis en radiografías de tórax.
 
-El proyecto cubre carga y auditoría del dataset, segmentación del campo pulmonar,
+El proyecto cubre carga y análisis del dataset, segmentación del campo pulmonar,
 extracción de características, validación cruzada anidada, evaluación estadística,
 calibración de probabilidades y predicción con los modelos finales.
 
@@ -33,7 +33,7 @@ cad-tbx11k/
 │   ├── data.py                ← carga del dataset
 │   ├── lung_segmentation.py   ← segmentación pulmonar con PSPNet
 │   ├── preprocessing.py       ← recorte torácico y modos de preprocesamiento
-│   ├── features.py            ← textura, HOG, forma y contexto
+│   ├── features.py            ← textura, HOG y utilidades
 │   ├── selection.py           ← selectores Chi2, MI y RF
 │   ├── modeling.py            ← utilidades de CV y métricas
 │   ├── artifacts.py           ← verificación de artefactos de notebooks
@@ -55,15 +55,8 @@ cad-tbx11k/
 │   ├── validate_masks.py        ← Dice/IoU contra máscaras manuales
 │   ├── preview_segmentation.py  ← control visual de la máscara
 │   ├── precompute_masks.py      ← caché de máscaras PSPNet
-│   ├── audit_views.py           ← comparación A/B/C/D
-│   ├── audit_acquisition.py     ← auditoría de adquisición
-│   ├── mitigate_shortcuts.py    ← M0/M1/M3 dentro de TBX11K
-│   ├── mitigate_augmentation.py ← M2: augmentation de adquisición
-│   ├── audit_sensitivity.py     ← sensibilidad a intervenciones
-│   ├── train_lesion_patches.py  ← especialista de parches de lesión
-│   ├── predict_lesion.py        ← predicción con parches de lesión
-│   ├── evaluate_external.py     ← evaluación en un dataset externo
-│   └── predict.py               ← predicción individual o por lote
+│   ├── predict.py               ← predicción individual o por lote
+│   └── evaluate_external.py     ← evaluación opcional en un dataset externo
 ├── data/                        ← dataset y artefactos (excluido de Git)
 ├── models/                      ← modelos finales (excluido de Git)
 ├── reports/                     ← figuras
@@ -84,8 +77,8 @@ cad-tbx11k/
 | `tb` | 2 | 800 | 800 |
 | **Total** | | **8.400** | **8.256** |
 
-- Los 144 duplicados exactos pertenecen a `sick`; la lista canónica está en
-  `src/dedup_drop_names.csv`.
+- Las 144 imágenes excluidas pertenecen a `sick`; la lista canónica está en
+  `src/dedup_drop_names.csv` (duplicados en el espacio de características).
 - El conjunto `test` (3.302 imágenes) no tiene etiquetas públicas y no se usa.
 - No hay identificadores de paciente; la validación cruzada es estratificada
   por imagen.
@@ -98,7 +91,7 @@ cad-tbx11k/
         └── data/df_base.csv                 (8.400 imágenes)
                 ├── 02, 03, 04              (EDA y preprocesamiento)
                 └── scripts/build_model_meta.py
-                        └── data/df_model.csv (8.256 tras dedup exacta)
+                        └── data/df_model.csv (8.256 tras exclusión de duplicados)
                                 └── 05_Extraccion_Caracteristicas.ipynb
                                         └── data/features_tbx11k.csv (1.860)
                                                 └── 06 → X_full.npy / y_full.npy / 06_seleccion.json
@@ -136,7 +129,6 @@ La validación con máscaras manuales (Dice/IoU) está en
 |---|---|
 | `thorax` | recorte torácico + filtro bilateral + CLAHE |
 | `lung` | como `thorax`, exterior relleno con la mediana pulmonar |
-| `context` | imagen completa + máscara de fondo |
 | `full` | imagen completa + filtro bilateral + CLAHE |
 | `mask` | exterior a 0 (solo compatibilidad) |
 
@@ -150,10 +142,8 @@ El modo principal del modelo es `thorax`.
 | `hog` | 1.764 | HOG 32×32, 7×7 bloques, calculado con la máscara rellena |
 | **Total del modelo** | **1.832** | textura pura (68) + HOG (1.764) |
 
-`shape`, `context` y `quality` existen en `src/features.py` para análisis de
-sesgo, pero **no se usan** en la matriz principal del modelo. Las columnas
-`mask_area_fraction`, `mask_lr_balance`, `mask_contrast` y `mask_fallback` se
-guardan para control de calidad, no como features.
+Las columnas `mask_area_fraction`, `mask_lr_balance`, `mask_contrast` y
+`mask_fallback` se guardan para control de calidad, no como features del modelo.
 
 ### 4. Modelado (`08_Modelos_ML.ipynb`)
 
@@ -269,9 +259,6 @@ regeneran con `nbconvert` cuando se necesiten.
   para incluir lesiones periféricas. TBX11K no tiene máscaras manuales de pulmón,
   así que la validación principal usa las cajas de lesión. Para medir Dice/IoU
   contra un subconjunto anotado manualmente se incluye `scripts/validate_masks.py`.
-- **Contexto de adquisición**: TBX11K presenta confusión entre clase y fuente.
-  El modelo principal usa solo textura + HOG del campo pulmonar; el notebook 09
-  incluye un baseline de fondo/borde para cuantificar ese sesgo.
 - **Test**: las 3.302 imágenes de `test` no tienen etiquetas públicas; no se
   dispone de validación externa.
 - **Pacientes**: no hay identificadores de paciente; la CV es estratificada por

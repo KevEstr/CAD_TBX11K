@@ -106,6 +106,57 @@ def _encode_png(img) -> str:
     return "data:image/png;base64," + _b64.b64encode(buf.tobytes()).decode()
 
 
+def _encode_segmentation(img, mask) -> str:
+    import base64 as _b64
+    import cv2 as _cv2
+    import numpy as np
+
+    if img is None or mask is None:
+        return ""
+
+    base = _cv2.cvtColor(img, _cv2.COLOR_GRAY2BGR)
+    mask_bool = np.asarray(mask, dtype=bool)
+    mask_u8 = (mask_bool.astype(np.uint8) * 255)
+    tint = base.copy()
+    tint[mask_bool] = (196, 211, 94)
+    out = _cv2.addWeighted(tint, 0.18, base, 0.82, 0)
+    contours, _ = _cv2.findContours(mask_u8, _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_SIMPLE)
+    _cv2.drawContours(out, contours, -1, (196, 211, 94), 2)
+
+    ok, buf = _cv2.imencode(".png", out)
+    if not ok:
+        return ""
+    return "data:image/png;base64," + _b64.b64encode(buf.tobytes()).decode()
+
+
+def _encode_segmentation_from_original(original_path: str, mask512) -> str:
+    import cv2 as _cv2
+    import numpy as np
+
+    if mask512 is None:
+        return ""
+    img = _cv2.imread(original_path, _cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return ""
+
+    h, w = img.shape[:2]
+    scale = min(1.0, 1024.0 / max(h, w))
+    if scale < 1.0:
+        img = _cv2.resize(
+            img,
+            (max(1, int(w * scale)), max(1, int(h * scale))),
+            interpolation=_cv2.INTER_AREA,
+        )
+
+    out_h, out_w = img.shape[:2]
+    mask = _cv2.resize(
+        np.asarray(mask512, dtype=np.uint8),
+        (out_w, out_h),
+        interpolation=_cv2.INTER_LINEAR,
+    ) > 0
+    return _encode_segmentation(img, mask)
+
+
 def _create_session() -> tuple[str, Path]:
     session_id = str(uuid.uuid4())
     temp_dir = Path(tempfile.mkdtemp(prefix=f"session_{session_id}_"))
@@ -241,6 +292,7 @@ async def predict(file: UploadFile = File(...)):
         "probabilities": {k: round(float(v), 4) for k, v in proba.items()},
         "probabilities_raw": {k: round(float(v), 4) for k, v in result["probabilities_raw"].items()},
         "image_base64": _encode_png(result["img_thorax"]),
+        "segmentation_base64": _encode_segmentation_from_original(result["original_path"], result.get("mask512")),
         "level1": level1,
         "metadata": {
             "model": "Logistic Regression (notebook 08, 3 clases)",

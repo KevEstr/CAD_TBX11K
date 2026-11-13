@@ -79,6 +79,7 @@ class InferencePipeline:
             "vec": vec,
             "img_thorax": img_thorax,
             "mask_thorax": mask_thorax,
+            "mask512": bundle.get("mask512"),
             "original_path": str(original_path),
             "threshold": self.threshold,
         }

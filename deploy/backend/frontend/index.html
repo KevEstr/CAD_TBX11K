@@ -3,182 +3,280 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#f4f2ed">
-  <title>CAD-TBX11K</title>
+  <meta name="theme-color" content="#f2eee4">
+  <meta name="description" content="Sistema de diagnóstico asistido por computador para la detección de tuberculosis pulmonar en radiografías de tórax.">
+  <title>CAD-TBX11K · Diagnóstico asistido de tuberculosis</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <div id="app">
-    <header class="site-header">
-      <h1 class="wordmark">CAD-TBX11K</h1>
+    <header class="masthead">
+      <span class="masthead-code">CAD-TBX11K</span>
+      <div class="masthead-right">
+        <span>Universidad de Antioquia</span>
+        <span>Facultad de Ingeniería</span>
+        <span>Medellín, Colombia</span>
+      </div>
     </header>
 
-    <main>
-      <section class="intro" aria-labelledby="intro-title">
-        <h2 id="intro-title" class="intro-lead">Sube una radiografía frontal de tórax en PNG o JPG, hasta 20 MB.</h2>
-        <p class="intro-body">El sistema segmenta los pulmones y estima la probabilidad de tuberculosis, otra enfermedad o un estudio normal. Devuelve la clase estimada, las probabilidades y las variables que más influyen.</p>
-        <p class="intro-note">Es una estimación del modelo, no un diagnóstico clínico.</p>
-      </section>
+    <main id="inicio">
+      <section id="proyecto" class="project" aria-labelledby="project-title">
+        <p class="project-kicker">Proyecto de desarrollo</p>
+        <h1 id="project-title">Diagnóstico asistido por computador para tuberculosis pulmonar en radiografías de tórax</h1>
 
-      <section id="upload-section" class="upload-panel" aria-label="Carga de radiografía">
-        <div id="upload-zone" class="upload-zone" role="button" tabindex="0" aria-label="Seleccionar radiografía">
-          <p class="upload-hint">Seleccionar radiografía</p>
-          <p class="upload-sub">Arrastra el archivo aquí o haz clic para buscarlo.</p>
-          <input type="file" id="file-input" accept=".png,.jpg,.jpeg,image/png,image/jpeg" hidden>
-        </div>
-
-        <div id="preview-section" class="preview-layout" hidden>
-          <div class="preview-media">
-            <img id="preview-img" alt="Vista previa de la radiografía">
+        <div class="project-meta">
+          <div class="meta-block meta-block--authors">
+            <h2 class="meta-label">Autores</h2>
+            <ul class="author-list">
+              <li>
+                <span class="author-name">Kevin Estrada Del Valle</span>
+                <a href="mailto:kevin.estrada1@udea.edu.co">kevin.estrada1@udea.edu.co</a>
+              </li>
+              <li>
+                <span class="author-name">Juan Andrés Rivera Arango</span>
+                <a href="mailto:juan.rivera7@udea.edu.co">juan.rivera7@udea.edu.co</a>
+              </li>
+              <li>
+                <span class="author-name">Brahiam Acosta Bedoya</span>
+                <a href="mailto:brahiam.acosta@udea.edu.co">brahiam.acosta@udea.edu.co</a>
+              </li>
+            </ul>
           </div>
-          <div class="preview-body">
-            <div class="preview-file">
-              <span id="preview-filename" class="preview-filename"></span>
-              <span id="preview-size" class="preview-size"></span>
+
+          <div class="meta-block">
+            <h2 class="meta-label">Filiación</h2>
+            <p class="meta-text">Universidad de Antioquia<br>Facultad de Ingeniería<br>Medellín, Colombia</p>
+            <div class="professor-block">
+              <h3 class="meta-label meta-label--sub">Profesora responsable</h3>
+              <p class="professor-name">Maria Bernarda Salazar Sanchez</p>
+              <a class="professor-email" href="mailto:bernarda.salazar@udea.edu.co">bernarda.salazar@udea.edu.co</a>
             </div>
-            <div class="preview-actions">
-              <button id="btn-analyze" class="btn btn-primary">Analizar radiografía</button>
-              <button id="btn-reset" class="btn btn-secondary">Nuevo análisis</button>
-            </div>
-            <p class="preview-note">La imagen se procesa en el servicio local. El resultado es una estimación del modelo y no sustituye la evaluación clínica.</p>
+          </div>
+
+          <div class="meta-block">
+            <h2 class="meta-label">Repositorio</h2>
+            <a class="repo-link" href="https://github.com/KevEstr/CAD_TBX11K" target="_blank" rel="noopener noreferrer">
+              <span>github.com/KevEstr/CAD_TBX11K</span>
+              <span aria-hidden="true">↗</span>
+            </a>
           </div>
         </div>
       </section>
 
-      <section id="loading-section" class="loading-panel" hidden aria-live="polite">
-        <div class="spinner" aria-hidden="true"></div>
-        <div>
-          <p class="loading-title">Procesando radiografía</p>
-          <p class="loading-sub">Segmentación pulmonar · extracción de características · clasificación</p>
-        </div>
-      </section>
+      <section id="analisis" class="analysis" aria-labelledby="analysis-title">
+        <header class="section-header">
+          <span class="section-number" aria-hidden="true">01</span>
+          <div class="section-heading">
+            <h2 id="analysis-title">Análisis de radiografía</h2>
+          </div>
+        </header>
 
-      <section id="results-section" hidden aria-labelledby="results-title">
-        <div class="section-head results-head">
-          <h2 id="results-title">Resultado</h2>
-        </div>
+        <section id="upload-section" class="upload-panel" aria-label="Carga de radiografía">
+          <div id="upload-zone" class="upload-zone" role="button" tabindex="0" aria-label="Seleccionar radiografía">
+            <div class="upload-plate" aria-hidden="true">
+              <svg viewBox="0 0 56 56" fill="none" stroke="currentColor" stroke-width="1.4">
+                <rect x="5.5" y="5.5" width="45" height="45"></rect>
+                <line x1="28" y1="18" x2="28" y2="38"></line>
+                <line x1="18" y1="28" x2="38" y2="28"></line>
+                <line x1="5.5" y1="14" x2="5.5" y2="5.5"></line>
+                <line x1="5.5" y1="5.5" x2="14" y2="5.5"></line>
+                <line x1="50.5" y1="42" x2="50.5" y2="50.5"></line>
+                <line x1="50.5" y1="50.5" x2="42" y2="50.5"></line>
+              </svg>
+              <span>Sin estudio</span>
+            </div>
+            <div class="upload-copy">
+              <p class="upload-hint">Adjuntar radiografía de tórax</p>
+              <p class="upload-sub">Arrastra un archivo PNG o JPG, o haz clic para seleccionarlo.</p>
+              <p class="upload-spec">Proyección frontal · máximo 20 MB</p>
+            </div>
+            <span class="upload-cta" aria-hidden="true">Seleccionar archivo</span>
+            <input type="file" id="file-input" accept=".png,.jpg,.jpeg,image/png,image/jpeg" hidden>
+          </div>
 
-        <div id="progress-card" class="progress-panel" hidden>
-          <div class="progress-head">
+          <div id="preview-section" class="preview-layout" hidden>
+            <div class="preview-media">
+              <img id="preview-img" alt="Vista previa de la radiografía">
+            </div>
+            <div class="preview-body">
+              <p class="preview-label">Estudio cargado</p>
+              <div class="preview-file">
+                <span id="preview-filename" class="preview-filename"></span>
+                <span id="preview-size" class="preview-size"></span>
+              </div>
+              <div class="preview-actions">
+                <button id="btn-analyze" class="btn btn-primary">Analizar radiografía</button>
+                <button id="btn-reset" class="btn btn-secondary">Nuevo análisis</button>
+              </div>
+              <p class="preview-note">El resultado es una estimación del modelo; no sustituye la evaluación clínica.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="loading-section" class="loading-panel" hidden aria-live="polite">
+          <div class="spinner" aria-hidden="true"></div>
+          <div class="loading-copy">
+            <p class="loading-title">Procesando radiografía</p>
+            <p class="loading-sub">Preparando la imagen · analizando los pulmones · calculando el resultado</p>
+          </div>
+          <p class="loading-code" aria-hidden="true">CAD / TBX11K</p>
+        </section>
+
+        <section id="results-section" hidden aria-labelledby="results-title">
+          <header class="section-header section-header--results">
+            <span class="section-number" aria-hidden="true">02</span>
+            <div class="section-heading">
+              <h2 id="results-title">Informe del análisis</h2>
+            </div>
+          </header>
+
+          <div id="progress-card" class="progress-panel" hidden>
+            <div class="progress-head">
+              <div>
+                <span class="progress-title">Zonas que afectan la probabilidad de tuberculosis</span>
+                <span class="progress-sub">Se ocultan partes de la radiografía para medir cuánto cambia la probabilidad estimada de tuberculosis.</span>
+              </div>
+              <span class="progress-percent" id="progress-percent">0%</span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+            <p class="progress-text" id="progress-text">Preparando el mapa de influencia...</p>
+          </div>
+
+          <div class="results-grid">
+            <article class="panel image-card">
+              <div class="panel-bar">
+                <h3 id="viewer-title">Radiografía cargada</h3>
+              </div>
+              <div class="panel-body">
+                <div class="overlay-container">
+                  <div class="canvas-frame">
+                    <canvas id="image-canvas" width="512" height="512" aria-label="Radiografía cargada"></canvas>
+                  </div>
+                  <div class="overlay-controls">
+                    <label for="overlay-select">Vista</label>
+                    <select id="overlay-select">
+                      <option value="regions" selected>Radiografía cargada</option>
+                      <option value="segmentation" disabled>Segmentación pulmonar</option>
+                      <option value="occlusion" disabled>Zonas que afectan la probabilidad de tuberculosis</option>
+                    </select>
+                  </div>
+                  <p class="image-note" id="view-note">La radiografía tal como la cargaste.</p>
+                  <div class="overlay-legend" id="overlay-legend" hidden>
+                    <div class="legend-scale">
+                      <span class="legend-label">Menos efecto</span>
+                      <span class="legend-ramp" aria-hidden="true"></span>
+                      <span class="legend-label">Más efecto</span>
+                    </div>
+                    <p class="legend-note">Las zonas más claras son las que más cambian la probabilidad estimada de tuberculosis al ocultarse. Las más oscuras casi no la cambian. El mapa se calcula sobre una copia reducida de la radiografía.</p>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel diagnosis-card">
+              <div class="panel-bar">
+                <h3>Resultado del modelo</h3>
+                <span class="tb-flag" id="tb-flag" hidden></span>
+              </div>
+              <div class="panel-body">
+                <p class="report-label">Resultado estimado</p>
+                <div id="diagnosis-class" class="diagnosis-class"></div>
+                <div class="confidence-line">
+                  <span>Confianza del resultado</span>
+                  <strong id="confidence-value">—</strong>
+                </div>
+                <p class="diagnosis-note" id="diagnosis-note"></p>
+
+                <div class="probability-block">
+                  <div class="probability-head">
+                    <span>Probabilidad por clase</span>
+                    <span>0 — 100%</span>
+                  </div>
+                  <div class="prob-item" id="prob-health">
+                    <span class="prob-label">Normal</span>
+                    <div class="prob-track"><div class="prob-fill health-fill" id="bar-health"></div></div>
+                    <span class="prob-value" id="val-health"></span>
+                  </div>
+                  <div class="prob-item" id="prob-sick">
+                    <span class="prob-label">Otra enfermedad</span>
+                    <div class="prob-track"><div class="prob-fill sick-fill" id="bar-sick"></div></div>
+                    <span class="prob-value" id="val-sick"></span>
+                  </div>
+                  <div class="prob-item" id="prob-tb">
+                    <span class="prob-label">Tuberculosis</span>
+                    <div class="prob-track"><div class="prob-fill tb-fill" id="bar-tb"></div></div>
+                    <span class="prob-value" id="val-tb"></span>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel regions-card">
+              <div class="panel-bar">
+                <h3>¿Qué datos de la imagen influyeron más?</h3>
+                <span class="panel-tag">Influencia</span>
+              </div>
+              <div class="panel-body">
+                <div id="regions-list" class="region-list"></div>
+                <p class="card-note">Textura analiza patrones de luz y sombra dentro del pulmón. Formas y bordes analiza contornos y cambios de dirección. El porcentaje indica cuánto aportó cada grupo a la probabilidad estimada de tuberculosis.</p>
+              </div>
+            </article>
+
+            <details class="panel tech-details">
+              <summary>
+                <span class="summary-title">Detalles técnicos</span>
+                <span class="summary-arrow" aria-hidden="true">+</span>
+              </summary>
+              <div class="tech-content">
+                <div class="tech-section">
+                  <h4 class="tech-heading">Datos del modelo</h4>
+                  <dl class="meta-list">
+                    <div><dt>Punto de corte de tuberculosis</dt><dd id="meta-threshold">—</dd></div>
+                    <div><dt>Tiempo de análisis</dt><dd id="meta-latency">—</dd></div>
+                    <div><dt>Características usadas</dt><dd>1.832</dd></div>
+                    <div><dt>Tipo de modelo</dt><dd>Regresión logística</dd></div>
+                  </dl>
+                  <p class="tech-note">El punto de corte es la probabilidad mínima que el modelo necesita para considerar el resultado como tuberculosis.</p>
+                  <p class="model-meta" id="model-meta"></p>
+                </div>
+
+                <div class="tech-section">
+                  <h4 class="tech-heading">Datos de la imagen que más influyeron</h4>
+                  <p class="tech-note">Cada fila es un dato medido en la radiografía. El efecto indica cuánto sumó (+) o restó (−) a la probabilidad de tuberculosis: los valores positivos acercan el resultado a tuberculosis y los negativos lo alejan. El nombre técnico aparece al pasar el cursor sobre cada dato.</p>
+                  <div class="feature-head" aria-hidden="true">
+                    <span></span>
+                    <span>Dato de la imagen</span>
+                    <span>Tipo</span>
+                    <span>Efecto</span>
+                  </div>
+                  <div id="features-list" class="feature-list"></div>
+                </div>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <section id="error-section" hidden aria-live="assertive">
+          <div class="error-card" role="alert">
             <div>
-              <span class="progress-title">Mapa de oclusión</span>
-              <span class="progress-sub">Cálculo en segundo plano</span>
+              <h3>No se pudo completar el análisis</h3>
+              <p id="error-message"></p>
             </div>
-            <span class="progress-percent" id="progress-percent">0%</span>
+            <button class="btn btn-secondary" onclick="resetUI()">Reintentar</button>
           </div>
-          <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-          <p class="progress-text" id="progress-text">Preparando análisis...</p>
-        </div>
-
-        <div class="results-grid">
-          <article class="image-card">
-            <div class="block-head">
-              <h3>Radiografía procesada</h3>
-            </div>
-            <div class="overlay-container">
-              <div class="canvas-frame">
-                <canvas id="image-canvas" width="512" height="512" aria-label="Radiografía procesada"></canvas>
-              </div>
-              <div class="overlay-controls">
-                <label for="overlay-select">Vista</label>
-                <select id="overlay-select">
-                  <option value="regions" selected>Radiografía procesada</option>
-                  <option value="occlusion" disabled>Mapa de oclusión</option>
-                </select>
-              </div>
-              <div class="overlay-legend" id="overlay-legend" hidden>
-                <span class="legend-label">Menor impacto</span>
-                <span class="legend-ramp" aria-hidden="true"></span>
-                <span class="legend-label">Mayor impacto</span>
-              </div>
-            </div>
-            <p class="image-note">Recorte torácico normalizado utilizado por el modelo.</p>
-          </article>
-
-          <article class="diagnosis-card">
-            <div class="block-head">
-              <h3>Resultado del modelo</h3>
-              <span class="tb-flag" id="tb-flag"></span>
-            </div>
-
-            <div id="diagnosis-class" class="diagnosis-class"></div>
-            <div class="confidence-line">
-              <span>Máxima probabilidad</span>
-              <strong id="confidence-value">—</strong>
-            </div>
-            <p class="diagnosis-note" id="diagnosis-note"></p>
-
-            <div class="probability-block">
-              <div class="probability-head">
-                <span>Probabilidad por clase</span>
-              </div>
-              <div class="prob-item" id="prob-health">
-                <span class="prob-label">Normal</span>
-                <div class="prob-track"><div class="prob-fill health-fill" id="bar-health"></div></div>
-                <span class="prob-value" id="val-health"></span>
-              </div>
-              <div class="prob-item" id="prob-sick">
-                <span class="prob-label">Otra enfermedad</span>
-                <div class="prob-track"><div class="prob-fill sick-fill" id="bar-sick"></div></div>
-                <span class="prob-value" id="val-sick"></span>
-              </div>
-              <div class="prob-item" id="prob-tb">
-                <span class="prob-label">Tuberculosis</span>
-                <div class="prob-track"><div class="prob-fill tb-fill" id="bar-tb"></div></div>
-                <span class="prob-value" id="val-tb"></span>
-              </div>
-            </div>
-
-            <dl class="meta-list">
-              <div><dt>Umbral TB</dt><dd id="meta-threshold">—</dd></div>
-              <div><dt>Latencia</dt><dd id="meta-latency">—</dd></div>
-              <div><dt>Variables</dt><dd>1.832</dd></div>
-              <div><dt>Modelo</dt><dd>Regresión logística</dd></div>
-            </dl>
-            <p class="model-meta" id="model-meta"></p>
-          </article>
-
-          <article class="regions-card">
-            <div class="block-head">
-              <h3>Contribución por familia</h3>
-            </div>
-            <div id="regions-list" class="region-list"></div>
-            <p class="card-note">Distribución normalizada de la contribución de las variables a la probabilidad de TB.</p>
-          </article>
-
-          <details class="tech-details">
-            <summary>
-              <span class="summary-title">Detalle técnico</span>
-              <span class="summary-arrow" aria-hidden="true">+</span>
-            </summary>
-            <div class="tech-content">
-              <p class="tech-note">Las 10 variables con mayor contribución absoluta a la probabilidad de TB. El signo indica si la variable aumenta o reduce la estimación.</p>
-              <div class="feature-head" aria-hidden="true">
-                <span></span>
-                <span>Variable</span>
-                <span>Familia</span>
-                <span>Aporte</span>
-              </div>
-              <div id="features-list" class="feature-list"></div>
-            </div>
-          </details>
-        </div>
-      </section>
-
-      <section id="error-section" hidden aria-live="assertive">
-        <div class="error-card" role="alert">
-          <div>
-            <h3>No se pudo completar el análisis</h3>
-            <p id="error-message"></p>
-          </div>
-          <button class="btn btn-secondary" onclick="resetUI()">Reintentar</button>
-        </div>
+        </section>
       </section>
     </main>
+
+    <footer class="site-footer">
+      <div>
+        <p class="footer-brand">CAD-TBX11K · Universidad de Antioquia</p>
+        <p class="footer-note">Herramienta de apoyo al tamizaje; no constituye un diagnóstico clínico.</p>
+      </div>
+      <a class="footer-link" href="https://github.com/KevEstr/CAD_TBX11K" target="_blank" rel="noopener noreferrer">Repositorio en GitHub ↗</a>
+    </footer>
   </div>
 
   <script src="/static/app.js"></script>
 </body>
 </html>
-
-

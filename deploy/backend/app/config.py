@@ -12,4 +12,4 @@ ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 OCCLUSION_GRID = 6
 SESSION_TTL = 300
 CLASS_NAMES = ["health", "sick", "tb"]
-TB_THRESHOLD = 0.5
+TB_THRESHOLD = 0.333768

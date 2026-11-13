@@ -3,7 +3,7 @@
 Pipeline de análisis, segmentación pulmonar y modelado sobre **TBX11K** para un
 sistema de apoyo al diagnóstico (CAD) de tuberculosis en radiografías de tórax.
 
-El proyecto cubre carga y análisis del dataset, segmentación del campo pulmonar,
+El proyecto cubre carga y auditoría del dataset, segmentación del campo pulmonar,
 extracción de características, validación cruzada anidada, evaluación estadística,
 calibración de probabilidades y predicción con los modelos finales.
 
@@ -33,7 +33,7 @@ cad-tbx11k/
 │   ├── data.py                ← carga del dataset
 │   ├── lung_segmentation.py   ← segmentación pulmonar con PSPNet
 │   ├── preprocessing.py       ← recorte torácico y modos de preprocesamiento
-│   ├── features.py            ← textura, HOG y utilidades
+│   ├── features.py            ← textura, HOG, forma y contexto
 │   ├── selection.py           ← selectores Chi2, MI y RF
 │   ├── modeling.py            ← utilidades de CV y métricas
 │   ├── artifacts.py           ← verificación de artefactos de notebooks
@@ -55,8 +55,15 @@ cad-tbx11k/
 │   ├── validate_masks.py        ← Dice/IoU contra máscaras manuales
 │   ├── preview_segmentation.py  ← control visual de la máscara
 │   ├── precompute_masks.py      ← caché de máscaras PSPNet
-│   ├── predict.py               ← predicción individual o por lote
-│   └── evaluate_external.py     ← evaluación opcional en un dataset externo
+│   ├── audit_views.py           ← comparación A/B/C/D
+│   ├── audit_acquisition.py     ← auditoría de adquisición
+│   ├── mitigate_shortcuts.py    ← M0/M1/M3 dentro de TBX11K
+│   ├── mitigate_augmentation.py ← M2: augmentation de adquisición
+│   ├── audit_sensitivity.py     ← sensibilidad a intervenciones
+│   ├── train_lesion_patches.py  ← especialista de parches de lesión
+│   ├── predict_lesion.py        ← predicción con parches de lesión
+│   ├── evaluate_external.py     ← evaluación en un dataset externo
+│   └── predict.py               ← predicción individual o por lote
 ├── data/                        ← dataset y artefactos (excluido de Git)
 ├── models/                      ← modelos finales (excluido de Git)
 ├── reports/                     ← figuras
@@ -70,15 +77,15 @@ cad-tbx11k/
 **Fuente:** [TBX11K — mmcheng.net](https://mmcheng.net/tb/)  
 **Kaggle:** [usmanshams/tbx-11](https://www.kaggle.com/datasets/usmanshams/tbx-11)
 
-| Clase | Etiqueta | Imágenes etiquetadas | Únicas tras deduplicar |
+| Clase | Etiqueta | Imágenes originales | Imágenes utilizadas |
 |---|---:|---:|---:|
 | `health` | 0 | 3.800 | 3.800 |
 | `sick` | 1 | 3.800 | 3.656 |
 | `tb` | 2 | 800 | 800 |
 | **Total** | | **8.400** | **8.256** |
 
-- Las 144 imágenes excluidas pertenecen a `sick`; la lista canónica está en
-  `src/dedup_drop_names.csv` (duplicados en el espacio de características).
+- Los 144 duplicados exactos pertenecen a `sick`; la lista canónica está en
+  `src/dedup_drop_names.csv`.
 - El conjunto `test` (3.302 imágenes) no tiene etiquetas públicas y no se usa.
 - No hay identificadores de paciente; la validación cruzada es estratificada
   por imagen.
@@ -91,7 +98,7 @@ cad-tbx11k/
         └── data/df_base.csv                 (8.400 imágenes)
                 ├── 02, 03, 04              (EDA y preprocesamiento)
                 └── scripts/build_model_meta.py
-                        └── data/df_model.csv (8.256 tras exclusión de duplicados)
+                        └── data/df_model.csv (8.256 tras dedup exacta)
                                 └── 05_Extraccion_Caracteristicas.ipynb
                                         └── data/features_tbx11k.csv (1.860)
                                                 └── 06 → X_full.npy / y_full.npy / 06_seleccion.json
@@ -129,6 +136,7 @@ La validación con máscaras manuales (Dice/IoU) está en
 |---|---|
 | `thorax` | recorte torácico + filtro bilateral + CLAHE |
 | `lung` | como `thorax`, exterior relleno con la mediana pulmonar |
+| `context` | imagen completa + máscara de fondo |
 | `full` | imagen completa + filtro bilateral + CLAHE |
 | `mask` | exterior a 0 (solo compatibilidad) |
 
@@ -142,8 +150,10 @@ El modo principal del modelo es `thorax`.
 | `hog` | 1.764 | HOG 32×32, 7×7 bloques, calculado con la máscara rellena |
 | **Total del modelo** | **1.832** | textura pura (68) + HOG (1.764) |
 
-Las columnas `mask_area_fraction`, `mask_lr_balance`, `mask_contrast` y
-`mask_fallback` se guardan para control de calidad, no como features del modelo.
+`shape`, `context` y `quality` existen en `src/features.py` para análisis de
+sesgo, pero **no se usan** en la matriz principal del modelo. Las columnas
+`mask_area_fraction`, `mask_lr_balance`, `mask_contrast` y `mask_fallback` se
+guardan para control de calidad, no como features.
 
 ### 4. Modelado (`08_Modelos_ML.ipynb`)
 
@@ -160,76 +170,85 @@ Las columnas `mask_area_fraction`, `mask_lr_balance`, `mask_contrast` y
 
 ## Instalación
 
+Los siguientes comandos están escritos para PowerShell en Windows:
+
 ```powershell
 python -m venv venv
 .\venv\Scripts\activate
 
-# PyTorch CPU (recomendado si no hay GPU)
+# PyTorch para CPU
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 ```
 
-La primera segmentación descarga los pesos de PSPNet en
-`~/.torchxrayvision/models_data` (requiere internet una vez).
+La primera ejecución de la segmentación descarga los pesos de PSPNet y requiere conexión a internet.
 
-El dataset debe descargarse en `data/TBX11K/` con la estructura
-`imgs/{health,sick,tb}` y las anotaciones COCO en
-`data/TBX11K/annotations/json/`.
+Descarga TBX11K y organiza los archivos de esta forma:
 
----
+```text
+data/TBX11K/
+├── imgs/
+│   ├── health/
+│   ├── sick/
+│   └── tb/
+└── annotations/
+    └── json/
+```
 
-## Reproducción
+## Cómo ejecutar los notebooks
 
-`powershell
-# 1. Carga: genera df_base.csv y df_model.csv
-jupyter nbconvert --to notebook --execute notebooks/01_Carga_Datos.ipynb --inplace
+La reproducción del proyecto se realiza desde **Jupyter Notebook**. No es necesario ejecutar los notebooks mediante comandos `nbconvert`.
 
-# 2. Análisis exploratorio y preprocesamiento
-jupyter nbconvert --to notebook --execute notebooks/02_Analisis_Exploratorio.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/03_Preprocesamiento.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/04_Analisis_Regional.ipynb --inplace
+1. Abre una terminal en la carpeta raíz del repositorio.
+2. Activa el entorno virtual e inicia Jupyter Notebook:
 
-# 3. Features con PSPNet + validación automática de máscaras
-jupyter nbconvert --to notebook --execute notebooks/05_Extraccion_Caracteristicas.ipynb --inplace
+   ```powershell
+   .\\venv\\Scripts\\activate
+   jupyter notebook
+   ```
 
-# 4. Selección y desbalanceo
-jupyter nbconvert --to notebook --execute notebooks/06_Seleccion_Caracteristicas.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/07_Desbalanceo.ipynb --inplace
+3. En la interfaz de Jupyter, abre la carpeta `notebooks/`.
+4. Abre los archivos y ejecuta sus celdas en orden, desde la primera hasta la última. Espera a que cada notebook termine antes de pasar al siguiente.
 
-# 5. Entrenamiento de los cinco modelos
-jupyter nbconvert --to notebook --execute notebooks/08_Modelos_ML.ipynb --inplace
+Sigue este orden para mantener la secuencia de generación de datos y artefactos:
 
-# 6. Evaluación e interpretabilidad
-jupyter nbconvert --to notebook --execute notebooks/09_Evaluacion_Comparativa.ipynb --inplace
-jupyter nbconvert --to notebook --execute notebooks/10_Interpretabilidad.ipynb --inplace
-`
+| Orden | Notebook | Etapa |
+|---:|---|---|
+| 1 | `01_Carga_Datos.ipynb` | Carga y preparación de datos |
+| 2 | `02_Analisis_Exploratorio.ipynb` | Análisis exploratorio |
+| 3 | `03_Preprocesamiento.ipynb` | Preprocesamiento |
+| 4 | `04_Analisis_Regional.ipynb` | Análisis regional |
+| 5 | `05_Extraccion_Caracteristicas.ipynb` | Segmentación y extracción de características |
+| 6 | `06_Seleccion_Caracteristicas.ipynb` | Selección de características |
+| 7 | `07_Desbalanceo.ipynb` | Tratamiento del desbalanceo |
+| 8 | `08_Modelos_ML.ipynb` | Entrenamiento de clasificadores |
+| 9 | `09_Evaluacion_Comparativa.ipynb` | Evaluación comparativa |
+| 10 | `10_Interpretabilidad.ipynb` | Interpretabilidad |
 
-El notebook 05 ejecuta la validación de segmentación con las máscaras cacheadas.
-Las herramientas de diagnóstico son opcionales:
+El notebook 05 utiliza las máscaras cacheadas y ejecuta la validación de segmentación. Si necesitas generarlas previamente, ejecuta `scripts/precompute_masks.py` desde una terminal, como se indica en la sección de herramientas auxiliares.
 
-`powershell
-python scripts/validate_masks.py --masks-dir ruta/a/mascaras
-python scripts/preview_segmentation.py --image ruta/a/radiografia.png --out-dir reports/seg
-python scripts/precompute_masks.py   # opcional; acelera la primera corrida de 05
-python scripts/evaluate_external.py --manifest ruta/manifest_externo.csv
-`
+## Usar el CAD desde la línea de comandos
 
-### Predicción de una imagen
+Para predecir una radiografía:
 
 ```powershell
 python scripts/predict.py --image ruta/a/radiografia.png
+```
+
+También se puede indicar un modelo, guardar la máscara o el preprocesamiento, generar un mapa de calor o procesar un CSV por lotes:
+
+```powershell
 python scripts/predict.py --image ruta.png --model "XGBoost"
 python scripts/predict.py --image ruta.png --save-mask mascara.png --save-preprocessed thorax.png
 python scripts/predict.py --image ruta.png --heatmap heatmap.png
 python scripts/predict.py --csv data/imagenes.csv --out data/predicciones.csv
 ```
 
-El manifiesto `models/08_manifest.json` indica el modelo seleccionado por la CV
-y `models/08_feature_schema.json` fija el orden exacto de las features. Si el
-CSV de lote incluye `label`, se calculan balanced accuracy, recall por clase y
-matriz de confusión.
+`models/08_manifest.json` registra el modelo seleccionado y `models/08_feature_schema.json` define el orden de las características. Si el CSV de entrada incluye una columna `label`, el script también calcula métricas y una matriz de confusión.
 
-### Salidas principales
+## Archivos generados
+
+Entre los principales artefactos del flujo experimental se encuentran:
 
 - `data/df_model.csv`
 - `data/features_tbx11k.csv`
@@ -259,6 +278,9 @@ regeneran con `nbconvert` cuando se necesiten.
   para incluir lesiones periféricas. TBX11K no tiene máscaras manuales de pulmón,
   así que la validación principal usa las cajas de lesión. Para medir Dice/IoU
   contra un subconjunto anotado manualmente se incluye `scripts/validate_masks.py`.
+- **Contexto de adquisición**: TBX11K presenta confusión entre clase y fuente.
+  El modelo principal usa solo textura + HOG del campo pulmonar; el notebook 09
+  incluye un baseline de fondo/borde para cuantificar ese sesgo.
 - **Test**: las 3.302 imágenes de `test` no tienen etiquetas públicas; no se
   dispone de validación externa.
 - **Pacientes**: no hay identificadores de paciente; la CV es estratificada por
